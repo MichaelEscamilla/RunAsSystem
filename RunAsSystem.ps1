@@ -658,6 +658,9 @@ function Set-RunningState {
     $Control.IsEnabled = -not $Running
   }
 
+  # Cancel only exists while something is running
+  $btn_Cancel.Visibility = if ($Running) { 'Visible' } else { 'Collapsed' }
+
   if ($Running) {
     $btn_Run.IsEnabled = $false
     $btn_Run.Content = 'Running...'
@@ -689,6 +692,7 @@ function Set-ResultDisplay {
     'Success' { $formRunAsSystem.FindResource('Success') }
     'Reboot' { $formRunAsSystem.FindResource('Accent') }
     'Failure' { $formRunAsSystem.FindResource('Danger') }
+    'Cancelled' { $formRunAsSystem.FindResource('TextMuted') }
     default { $formRunAsSystem.FindResource('Text') }
   }
 
@@ -799,12 +803,81 @@ function Watch-SystemRun {
   Complete-SystemRun -ExitCode $Status.LastTaskResult
 }
 
+function Get-RunProcessId {
+  # Task Scheduler and PsExec don't hand back the installer's PID, so find it by the installer path in
+  # its command line and its start time. Only the top of each matching tree is returned, since stopping
+  # that ends its children too. The Windows Installer service (msiexec /V) never has the path in its
+  # command line, so it's never matched.
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Run
+  )
+
+  $Since = $Run.Started.AddSeconds(-5)
+  $InstallerPath = $Run.Spec.InstallerPath
+  # The local PsExec client also has the path in its command line, and is stopped separately
+  $PsExecClientId = if ($Run.Process) { $Run.Process.Id } else { -1 }
+
+  $Found = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
+      $_.CommandLine -and
+      $_.CommandLine.IndexOf($InstallerPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+      $_.CreationDate -ge $Since -and
+      $_.ProcessId -ne $PID -and
+      $_.ProcessId -ne $PsExecClientId
+    })
+
+  $FoundIds = @($Found | ForEach-Object { $_.ProcessId })
+  return @($Found | Where-Object { $FoundIds -notcontains $_.ParentProcessId } | ForEach-Object { $_.ProcessId })
+}
+
+function Stop-SystemRun {
+  $Run = $Script:CurrentRun
+  if (-not $Run) { return }
+
+  $Answer = [System.Windows.MessageBox]::Show("Stop the installer?`n`nThe installer and anything it started are ended immediately, so the software may be left partly installed. Windows Installer (MSI) normally rolls back an install that is stopped.", "Run As SYSTEM - Cancel", "YesNo", "Warning")
+  if ($Answer -ne 'Yes') { return }
+  # The timer keeps running while the prompt is open, so the run may have finished in the meantime
+  if ($Script:CurrentRun -ne $Run) { return }
+
+  Write-Host "Cancelling run: [$($Run.CommandRun)]"
+  $Note = $null
+  try {
+    $ProcessIds = @(Get-RunProcessId -Run $Run)
+  }
+  catch {
+    $ProcessIds = @()
+    Write-Host "Unable to list processes: $($_.Exception.Message)"
+  }
+
+  foreach ($ProcessId in $ProcessIds) {
+    # /T ends the whole tree: bootstrappers and PSADT often start child installers
+    Write-Host "Stopping process tree: [$ProcessId]"
+    & "$env:SystemRoot\System32\taskkill.exe" /PID $ProcessId /T /F 2>&1 | ForEach-Object { Write-Host "  $_" }
+  }
+  if ($ProcessIds.Count -eq 0) {
+    $Note = "The installer process couldn't be found, so only the $(if ($Run.TaskName) { 'Scheduled Task' } else { 'PsExec client' }) was stopped. Check Task Manager for anything still running."
+    Write-Host $Note
+  }
+
+  # Also stop what launched it, in case the process search missed something
+  if ($Run.TaskName) {
+    try { (Connect-TaskService).GetFolder('\').GetTask($Run.TaskName).Stop(0) } catch {}
+  }
+  if ($Run.Process -and -not $Run.Process.HasExited) {
+    try { $Run.Process.Kill() } catch {}
+  }
+
+  Complete-SystemRun -Cancelled -ErrorMessage $Note
+}
+
 function Complete-SystemRun {
   param (
     [Parameter(Mandatory = $false)]
     [Nullable[int]]$ExitCode,
     [Parameter(Mandatory = $false)]
-    [string]$ErrorMessage
+    [string]$ErrorMessage,
+    [Parameter(Mandatory = $false)]
+    [switch]$Cancelled
   )
 
   $Script:RunTimer.Stop()
@@ -817,7 +890,14 @@ function Complete-SystemRun {
   $ModeText = if ($Run.Mode -eq 'PsExec') { 'Interactive (PsExec)' } else { 'Session 0' }
   $Details = "$ModeText  |  Started $($Run.Started.ToString('T'))  |  Duration $($Duration.ToString('hh\:mm\:ss'))"
 
-  if ($null -ne $ExitCode) {
+  if ($Cancelled) {
+    $Meaning = 'Cancelled - the installer was stopped'
+    if ($ErrorMessage) { $Meaning += ". $ErrorMessage" }
+    $Category = 'Cancelled'
+    Set-ResultDisplay -ExitCodeText 'Cancelled' -Meaning $Meaning -Details $Details -Category $Category
+    Write-Host "Run cancelled"
+  }
+  elseif ($null -ne $ExitCode) {
     $Info = Get-ExitCodeInfo -ExitCode $ExitCode
     Set-ResultDisplay -ExitCodeText "$ExitCode" -HexText $Info.Hex -Meaning $Info.Meaning -Details $Details -Category $Info.Category
     Write-Host "Exit Code: [$ExitCode] [$($Info.Hex)] $($Info.Meaning)"
@@ -974,13 +1054,14 @@ function Update-HistoryList {
     $CodeBrush = switch ($Entry.Category) {
       'Success' { $formRunAsSystem.FindResource('Success') }
       'Reboot' { $formRunAsSystem.FindResource('Accent') }
+      'Cancelled' { $formRunAsSystem.FindResource('TextMuted') }
       default { $formRunAsSystem.FindResource('Danger') }
     }
 
     # Line 1: File name and exit code
     $Line1 = New-Object System.Windows.Controls.DockPanel
     $Code = New-Object System.Windows.Controls.TextBlock
-    $Code.Text = if ($null -ne $Entry.ExitCode) { [string]$Entry.ExitCode } else { 'Error' }
+    $Code.Text = if ($Entry.Category -eq 'Cancelled') { 'Cancelled' } elseif ($null -ne $Entry.ExitCode) { [string]$Entry.ExitCode } else { 'Error' }
     $Code.Foreground = $CodeBrush
     $Code.FontWeight = 'SemiBold'
     $Code.Margin = '8,0,0,0'
@@ -2533,12 +2614,28 @@ Add-Type -AssemblyName WindowsBase
                 ToolTip="Copy the command line"
                 Content="&#xE8C8;"/>
           </Grid>
-          <Button Grid.Row="11"
-              Name="btn_Run"
-              Style="{StaticResource AccentButton}"
-              Margin="2.5,8,2.5,2.5"
-              ToolTip="Ctrl+Enter or F5"
-              Content="Run as SYSTEM"/>
+          <!-- Cancel is a separate button rather than Run changing into Cancel, so double-clicking Run can't stop the install -->
+          <Grid Grid.Row="11"
+              Margin="0,5.5,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0"
+                Name="btn_Run"
+                Style="{StaticResource AccentButton}"
+                ToolTip="Ctrl+Enter or F5"
+                Content="Run as SYSTEM"/>
+            <Button Grid.Column="1"
+                Name="btn_Cancel"
+                Width="140"
+                FontSize="16"
+                Foreground="{StaticResource Danger}"
+                BorderBrush="{StaticResource Danger}"
+                Visibility="Collapsed"
+                ToolTip="Stop the installer and anything it started"
+                Content="Cancel"/>
+          </Grid>
 
           <!-- RESULT -->
           <TextBlock Grid.Row="12"
@@ -2779,6 +2876,7 @@ $btn_CommandLine_Copy.Add_Click({
 
 #### Run ####
 $btn_Run.Add_Click({ Start-SystemRun })
+$btn_Cancel.Add_Click({ Stop-SystemRun })
 
 #### Keyboard Shortcuts ####
 # Preview so the shortcuts work whichever control has focus. Each one only acts when its button is enabled,

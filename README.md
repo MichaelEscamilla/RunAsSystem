@@ -51,6 +51,9 @@ The installer's own folder is always used as the working directory, the same as 
 
 The **Command Line** box shows exactly what will run, and you can copy it with the copy button.
 
+## Cancelling a Run
+While an installer is running, a **Cancel** button appears next to Run. It stops the installer and anything it started, in both Session 0 and PsExec modes, and records the run as **Cancelled** in history. Stopping an installer partway can leave the software partly installed. Windows Installer normally rolls back an MSI that is stopped.
+
 ## Exit Codes
 When the run finishes, the exit code is shown in colour:
 - **Green**: success (`0`, `1707`).
