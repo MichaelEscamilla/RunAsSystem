@@ -52,7 +52,9 @@ The installer's own folder is always used as the working directory, the same as 
 The **Command Line** box shows exactly what will run, and you can copy it with the copy button.
 
 ## Cancelling a Run
-While an installer is running, a **Cancel** button appears next to Run. It stops the installer and anything it started, in both Session 0 and PsExec modes, and records the run as **Cancelled** in history. Stopping an installer partway can leave the software partly installed. Windows Installer normally rolls back an MSI that is stopped.
+While an installer is running, a **Cancel** button appears next to Run. It stops the installer and anything it started, in both Session 0 and PsExec modes, and records the run as **Cancelled** in history. Stopping an installer partway can leave the software partly installed.
+
+**MSI and MSP files can't be cancelled.** The install runs in the Windows Installer service rather than in the `msiexec.exe` process the tool starts, so the button says **Stop Waiting** instead. Windows Installer finishes the install in the background, and the log keeps being written. Starting another MSI before it finishes returns `1618`. Uninstall afterwards if you need to undo it.
 
 ## Exit Codes
 When the run finishes, the exit code is shown in colour:
