@@ -89,7 +89,7 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
   - a fixed-height result panel, with the command line taking the leftover height
   - keyboard shortcuts
   - the hex exit code
-- [ ] Test the keyboard shortcuts in the app (only F5 could be tested offscreen).
+- [x] Test the keyboard shortcuts in the app. The owner confirmed they all work.
 - [ ] Run the elevated tests above.
 - [ ] Add screenshots to `Images/` and the README.
 - [ ] Optionally add a short URL on michaeltheadmin.com (like `msiapp.michaeltheadmin.com`) and update the README.
