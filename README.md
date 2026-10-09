@@ -8,7 +8,7 @@ Run the script directly from GitHub:
 
 ### Invoke-Expression
 ```powershell
-iex (irm https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/RunAsSystem.ps1)
+iex (irm runassystem.michaeltheadmin.com)
 ```
 
 The app needs administrator rights. If it isn't started elevated, it relaunches itself and shows a UAC prompt.
@@ -34,7 +34,7 @@ The tool looks for `PsExec64.exe` (or `PsExec.exe`) in the installer's folder fi
 ## Supported File Types
 | Type | Runs as |
 | --- | --- |
-| `.msi` | `msiexec.exe /i` (or `/x`, `/fvomus`) `"file.msi"` + UI level, `/norestart`, `/l*v` log and properties |
+| `.msi` | `msiexec.exe /i` (or `/x`, `/fvomus`) `"file.msi"` + UI level, `/l*v` log and properties |
 | `.msp` | `msiexec.exe /p "file.msp"` + the same options |
 | `.exe` | The file itself, with your arguments |
 | `.ps1` | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "file.ps1"` + arguments |
@@ -46,9 +46,8 @@ The installer's own folder is always used as the working directory, the same as 
 ## MSI Options
 - **Action**: Install (`/i`), Uninstall (`/x`) or Repair (`/fvomus`).
 - **UI**: Silent (`/qn`), Basic (`/qb`), Basic with no cancel (`/qb!`), Passive (`/passive`) or Full UI.
-- **`/norestart`**: on by default.
 - **Log**: a verbose log (`/l*v`) is on by default. It's written next to the installer with `.log` added to the installer's file name (for example `Setup.msi` → `Setup.msi.log`). You can change the path.
-- **Properties**: anything else to pass to msiexec, such as `ALLUSERS=1 TRANSFORMS="app.mst"`.
+- **Properties**: anything else to pass to msiexec, such as `ALLUSERS=1 TRANSFORMS="app.mst"` or `/norestart`.
 
 The **Command Line** box shows exactly what will run, and you can copy it with the copy button.
 

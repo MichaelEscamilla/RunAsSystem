@@ -194,12 +194,24 @@ function Set-ComboBoxTag {
   }
 }
 
+function Set-StatusBar {
+  param (
+    [Parameter(Mandatory = $true)]
+    [string]$Text,
+    [Parameter(Mandatory = $false)]
+    [switch]$Warning
+  )
+
+  # Every message sets the colour, so a warning doesn't stay red after the next normal message
+  $txtblk_StatusBar.Text = $Text
+  $txtblk_StatusBar.Foreground = if ($Warning) { $formRunAsSystem.FindResource('Danger') } else { $formRunAsSystem.FindResource('TextMuted') }
+}
+
 function Get-FormState {
   [PSCustomObject]@{
     FilePath   = $txt_FilePath.Text.Trim().Trim('"')
     MsiAction  = Get-ComboBoxTag -ComboBox $cmb_MsiAction
     MsiUI      = Get-ComboBoxTag -ComboBox $cmb_MsiUI
-    NoRestart  = [bool]$chk_NoRestart.IsChecked
     LogEnabled = [bool]$chk_Log.IsChecked
     LogPath    = $txt_LogPath.Text.Trim().Trim('"')
     Arguments  = $txt_Arguments.Text.Trim()
@@ -217,7 +229,6 @@ function Set-FormState {
   $txt_FilePath.Text = $State.FilePath
   Set-ComboBoxTag -ComboBox $cmb_MsiAction -Tag $State.MsiAction
   Set-ComboBoxTag -ComboBox $cmb_MsiUI -Tag $State.MsiUI
-  $chk_NoRestart.IsChecked = [bool]$State.NoRestart
   $chk_Log.IsChecked = [bool]$State.LogEnabled
   if ($State.LogPath) { $txt_LogPath.Text = $State.LogPath }
   $txt_Arguments.Text = $State.Arguments
@@ -245,7 +256,6 @@ function Get-CommandSpec {
       $Action = if ($Type -eq 'MSP') { '/p' } else { $State.MsiAction }
       $Parts = @($Action, "`"$InstallerPath`"")
       if ($State.MsiUI) { $Parts += $State.MsiUI }
-      if ($State.NoRestart) { $Parts += '/norestart' }
       if ($State.LogEnabled -and $State.LogPath) {
         $LogPath = $State.LogPath
         $Parts += "/l*v `"$LogPath`""
@@ -622,7 +632,7 @@ function Set-RunningState {
     [bool]$Running
   )
 
-  foreach ($Control in @($txt_FilePath, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_NoRestart, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $btn_HistoryLoad, $btn_HistoryClear)) {
+  foreach ($Control in @($txt_FilePath, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $btn_HistoryLoad, $btn_HistoryClear)) {
     $Control.IsEnabled = -not $Running
   }
 
@@ -808,7 +818,6 @@ function Complete-SystemRun {
       FilePath    = $Run.State.FilePath
       MsiAction   = $Run.State.MsiAction
       MsiUI       = $Run.State.MsiUI
-      NoRestart   = $Run.State.NoRestart
       LogEnabled  = $Run.State.LogEnabled
       LogPath     = $Run.State.LogPath
       Arguments   = $Run.State.Arguments
@@ -825,17 +834,75 @@ function Complete-SystemRun {
 }
 
 #### History ####
+function Protect-HistoryValue {
+  # Arguments can hold passwords and license keys. DPAPI (CurrentUser scope) means only this
+  # Windows account on this device can decrypt them, so a copied History.json is unreadable.
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Value
+  )
+
+  if ([string]::IsNullOrEmpty($Value)) { return '' }
+  return ConvertTo-SecureString -String $Value -AsPlainText -Force | ConvertFrom-SecureString
+}
+
+function Unprotect-HistoryValue {
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Value
+  )
+
+  if ([string]::IsNullOrEmpty($Value)) { return '' }
+  $Secure = ConvertTo-SecureString -String $Value -ErrorAction Stop
+  return (New-Object System.Net.NetworkCredential('', $Secure)).Password
+}
+
 function Get-History {
   if (-not (Test-Path -LiteralPath $Script:HistoryPath)) { return @() }
   try {
     $Data = Get-Content -LiteralPath $Script:HistoryPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     # Piping unrolls the array (Windows PowerShell 5.1 returns a JSON array as a single object)
-    return @($Data | ForEach-Object { $_ })
+    $Entries = @($Data | ForEach-Object { $_ })
   }
   catch {
     Write-Host "Unable to read history: $($_.Exception.Message)"
     return @()
   }
+
+  $HasPlainText = $false
+  foreach ($Entry in $Entries) {
+    if (-not $Entry.PSObject.Properties['ArgumentsProtected']) {
+      # Saved by a version that stored arguments as plain text
+      $HasPlainText = $true
+      continue
+    }
+
+    try {
+      $Arguments = Unprotect-HistoryValue -Value $Entry.ArgumentsProtected
+      $CommandLine = Unprotect-HistoryValue -Value $Entry.CommandLineProtected
+      $Entry.PSObject.Properties.Remove('ArgumentsProtected')
+      $Entry.PSObject.Properties.Remove('CommandLineProtected')
+      $Unreadable = $false
+    }
+    catch {
+      # Encrypted by another Windows account or device, or the account's password was reset.
+      # Keep the encrypted values so saving the history doesn't destroy them.
+      $Arguments = ''
+      $CommandLine = ''
+      $Unreadable = $true
+    }
+    $Entry | Add-Member -NotePropertyName 'Arguments' -NotePropertyValue $Arguments -Force
+    $Entry | Add-Member -NotePropertyName 'CommandLine' -NotePropertyValue $CommandLine -Force
+    $Entry | Add-Member -NotePropertyName 'ArgumentsUnreadable' -NotePropertyValue $Unreadable -Force
+  }
+
+  # Re-save straight away so plain-text arguments don't stay on disk until the next run
+  if ($HasPlainText) {
+    Write-Host "Encrypting the arguments saved in history: [$Script:HistoryPath]"
+    Save-History -Entries $Entries
+  }
+
+  return $Entries
 }
 
 function Save-History {
@@ -848,7 +915,16 @@ function Save-History {
     if (-not (Test-Path -LiteralPath $Script:AppDataPath)) {
       New-Item -ItemType Directory -Path $Script:AppDataPath -Force | Out-Null
     }
-    ConvertTo-Json -InputObject @($Entries) -Depth 3 | Set-Content -LiteralPath $Script:HistoryPath -Encoding UTF8 -ErrorAction Stop
+
+    $Output = @(foreach ($Entry in $Entries) {
+      $Copy = $Entry | Select-Object -Property * -ExcludeProperty 'Arguments', 'CommandLine', 'ArgumentsUnreadable'
+      if (-not $Entry.ArgumentsUnreadable) {
+        $Copy | Add-Member -NotePropertyName 'ArgumentsProtected' -NotePropertyValue (Protect-HistoryValue -Value $Entry.Arguments) -Force
+        $Copy | Add-Member -NotePropertyName 'CommandLineProtected' -NotePropertyValue (Protect-HistoryValue -Value $Entry.CommandLine) -Force
+      }
+      $Copy
+    })
+    ConvertTo-Json -InputObject $Output -Depth 3 | Set-Content -LiteralPath $Script:HistoryPath -Encoding UTF8 -ErrorAction Stop
   }
   catch {
     Write-Host "Unable to save history: $($_.Exception.Message)"
@@ -900,15 +976,68 @@ function Update-HistoryList {
     $Line2.FontSize = 11
     $Line2.Foreground = $formRunAsSystem.FindResource('TextMuted')
     $Line2.TextTrimming = 'CharacterEllipsis'
+    if ($Entry.ArgumentsUnreadable) {
+      # Warning icon (Segoe MDL2 Assets) so the entry stands out before it's loaded
+      $Icon = New-Object System.Windows.Documents.Run ([string][char]0xE7BA)
+      $Icon.FontFamily = 'Segoe MDL2 Assets'
+      $Icon.Foreground = $formRunAsSystem.FindResource('Danger')
+      $Line2.Inlines.Add((New-Object System.Windows.Documents.Run '  |  '))
+      $Line2.Inlines.Add($Icon)
+    }
 
     $Panel = New-Object System.Windows.Controls.StackPanel
     $Panel.Children.Add($Line1) | Out-Null
     $Panel.Children.Add($Line2) | Out-Null
 
+    # Line 3: Arguments, so runs of the same installer with different arguments can be told apart
+    if ($Entry.Arguments) {
+      $Line3 = New-Object System.Windows.Controls.TextBlock
+      $Line3.Text = $Entry.Arguments
+      $Line3.FontFamily = 'Consolas'
+      $Line3.FontSize = 11
+      $Line3.Foreground = $formRunAsSystem.FindResource('TextMuted')
+      $Line3.TextTrimming = 'CharacterEllipsis'
+      $Line3.Margin = '0,2,0,0'
+      $Panel.Children.Add($Line3) | Out-Null
+    }
+
+    # Load and Copy buttons beside the exit code, only while the mouse is over the entry.
+    # Collapsed otherwise, so the file name gets the full width.
+    $Actions = New-Object System.Windows.Controls.StackPanel
+    $Actions.Orientation = 'Horizontal'
+    [System.Windows.Controls.DockPanel]::SetDock($Actions, 'Right')
+    $HoverBinding = New-Object System.Windows.Data.Binding 'IsMouseOver'
+    $HoverBinding.RelativeSource = New-Object System.Windows.Data.RelativeSource ([System.Windows.Data.RelativeSourceMode]::FindAncestor, [System.Windows.Controls.ListBoxItem], 1)
+    $HoverBinding.Converter = New-Object System.Windows.Controls.BooleanToVisibilityConverter
+    $Actions.SetBinding([System.Windows.UIElement]::VisibilityProperty, $HoverBinding) | Out-Null
+
+    $LoadButton = New-Object System.Windows.Controls.Button
+    $LoadButton.Style = $formRunAsSystem.FindResource('HistoryIconButton')
+    # Segoe MDL2 Assets: Upload (load into the form)
+    $LoadButton.Content = [string][char]0xE898
+    $LoadButton.ToolTip = 'Load this run into the form'
+    $LoadButton.Tag = $Entry
+    $LoadButton.Add_Click({ Import-HistoryEntry -Entry $this.Tag })
+    $Actions.Children.Add($LoadButton) | Out-Null
+
+    # Nothing to copy when the command line couldn't be decrypted
+    if (-not $Entry.ArgumentsUnreadable) {
+      $CopyButton = New-Object System.Windows.Controls.Button
+      $CopyButton.Style = $formRunAsSystem.FindResource('HistoryIconButton')
+      $CopyButton.Content = [string][char]0xE8C8
+      $CopyButton.ToolTip = 'Copy the command line'
+      $CopyButton.Tag = $Entry
+      $CopyButton.Add_Click({ Copy-HistoryEntry -Entry $this.Tag })
+      $Actions.Children.Add($CopyButton) | Out-Null
+    }
+
+    # Docked children must come before the name, which fills the rest of the line
+    $Line1.Children.Insert(1, $Actions)
+
     $Item = New-Object System.Windows.Controls.ListBoxItem
     $Item.Content = $Panel
     $Item.Tag = $Entry
-    $Item.ToolTip = "$($Entry.CommandLine)`n`n$($Entry.Meaning)"
+    $Item.ToolTip = if ($Entry.ArgumentsUnreadable) { "The arguments of this run were saved by another Windows account or device and can't be decrypted.`n`n$($Entry.Meaning)" } else { "$($Entry.CommandLine)`n`n$($Entry.Meaning)" }
     $lsbox_History.Items.Add($Item) | Out-Null
   }
 
@@ -916,10 +1045,43 @@ function Update-HistoryList {
   Update-HistoryButtons
 }
 
+function Import-HistoryEntry {
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Entry
+  )
+
+  if ($Script:CurrentRun) {
+    Set-StatusBar -Warning -Text "A run can't be loaded while an installer is running"
+    return
+  }
+
+  Set-FormState -State $Entry
+  if ($Entry.ArgumentsUnreadable) {
+    Set-StatusBar -Warning -Text "Loaded run from $($Entry.Timestamp) WITHOUT its arguments - they were saved on another account or device and can't be decrypted here. Re-enter them before running."
+  }
+  else {
+    Set-StatusBar -Text "Loaded run from $($Entry.Timestamp)"
+  }
+}
+
+function Copy-HistoryEntry {
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Entry
+  )
+
+  if (-not $Entry.CommandLine) { return }
+  [System.Windows.Clipboard]::SetText($Entry.CommandLine)
+  Write-Host "Copied to Clipboard: [$($Entry.CommandLine)]"
+  Set-StatusBar -Text "Command line copied to the clipboard"
+}
+
 function Update-HistoryButtons {
   $HasSelection = $null -ne $lsbox_History.SelectedItem
   $btn_HistoryLoad.IsEnabled = $HasSelection -and ($null -eq $Script:CurrentRun)
-  $btn_HistoryCopy.IsEnabled = $HasSelection
+  # There's nothing to copy when the command line couldn't be decrypted
+  $btn_HistoryCopy.IsEnabled = $HasSelection -and -not $lsbox_History.SelectedItem.Tag.ArgumentsUnreadable
 }
 
 #### Elevated Drag and Drop ####
@@ -1142,7 +1304,7 @@ function Install-RightClickMenu {
     Write-Host "Registry Modified:  [$KeyPath]"
   }
   Write-Host "Installation Complete"
-  $txtblk_StatusBar.Text = "Right-click menu installed for: $($Script:SupportedExtensions -join ' ')"
+  Set-StatusBar -Text "Right-click menu installed for: $($Script:SupportedExtensions -join ' ')"
 }
 
 function Uninstall-RightClickMenu {
@@ -1160,7 +1322,7 @@ function Uninstall-RightClickMenu {
   Remove-Item -LiteralPath $Script:RightClickMenuFolderPath -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host "Deleted Folder:   [$($Script:RightClickMenuFolderPath)]"
   Write-Host "Uninstallation Complete"
-  $txtblk_StatusBar.Text = "Right-click menu uninstalled"
+  Set-StatusBar -Text "Right-click menu uninstalled"
 }
 #endregion Functions
 
@@ -1906,6 +2068,62 @@ Add-Type -AssemblyName WindowsBase
       </Setter>
     </Style>
 
+    <!-- Small icon buttons shown on a history entry while the mouse is over it -->
+    <Style x:Key="HistoryIconButton"
+        TargetType="Button">
+      <Setter Property="Foreground"
+          Value="{StaticResource TextMuted}"/>
+      <Setter Property="Background"
+          Value="Transparent"/>
+      <Setter Property="BorderBrush"
+          Value="Transparent"/>
+      <Setter Property="FontFamily"
+          Value="Segoe MDL2 Assets"/>
+      <Setter Property="FontSize"
+          Value="12"/>
+      <Setter Property="Width"
+          Value="26"/>
+      <Setter Property="Height"
+          Value="22"/>
+      <!-- Negative vertical margin keeps the line the same height when the buttons appear -->
+      <Setter Property="Margin"
+          Value="2,-3,0,-3"/>
+      <Setter Property="Cursor"
+          Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="4">
+              <ContentPresenter HorizontalAlignment="Center"
+                  VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver"
+                  Value="True">
+                <Setter TargetName="Bd"
+                    Property="BorderBrush"
+                    Value="{StaticResource Accent}"/>
+                <Setter Property="Foreground"
+                    Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsPressed"
+                  Value="True">
+                <Setter TargetName="Bd"
+                    Property="Background"
+                    Value="{StaticResource Accent}"/>
+                <Setter Property="Foreground"
+                    Value="{StaticResource AccentText}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <!-- Tooltip -->
     <Style TargetType="ToolTip">
       <Setter Property="Background"
@@ -2165,7 +2383,6 @@ Add-Type -AssemblyName WindowsBase
               <ColumnDefinition Width="200"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <Label Grid.Column="0"
                 Content="Action"/>
@@ -2195,10 +2412,6 @@ Add-Type -AssemblyName WindowsBase
               <ComboBoxItem Content="Full UI"
                   Tag=""/>
             </ComboBox>
-            <CheckBox Grid.Column="4"
-                Name="chk_NoRestart"
-                Content="/norestart"
-                IsChecked="True"/>
           </Grid>
           <Grid Grid.Row="5"
               Name="panel_MsiLog"
@@ -2491,7 +2704,6 @@ $txt_Arguments.Add_TextChanged({ Update-CommandPreview })
 $txt_LogPath.Add_TextChanged({ Update-CommandPreview })
 $cmb_MsiAction.Add_SelectionChanged({ Update-CommandPreview })
 $cmb_MsiUI.Add_SelectionChanged({ Update-CommandPreview })
-$chk_NoRestart.Add_Click({ Update-CommandPreview })
 $chk_Log.Add_Click({
     $txt_LogPath.IsEnabled = [bool]$chk_Log.IsChecked
     Update-CommandPreview
@@ -2516,7 +2728,7 @@ $btn_CommandLine_Copy.Add_Click({
     if ($txt_CommandLine.Text) {
       [System.Windows.Clipboard]::SetText($txt_CommandLine.Text)
       Write-Host "Copied to Clipboard: [$($txt_CommandLine.Text)]"
-      $txtblk_StatusBar.Text = "Command line copied to the clipboard"
+      Set-StatusBar -Text "Command line copied to the clipboard"
     }
   })
 
@@ -2543,21 +2755,14 @@ $lsbox_History.Add_SelectionChanged({ Update-HistoryButtons })
 
 $Script:HistoryLoadHandler = {
   $Item = $lsbox_History.SelectedItem
-  if ($Item -and -not $Script:CurrentRun) {
-    Set-FormState -State $Item.Tag
-    $txtblk_StatusBar.Text = "Loaded run from $($Item.Tag.Timestamp)"
-  }
+  if ($Item) { Import-HistoryEntry -Entry $Item.Tag }
 }
 $btn_HistoryLoad.Add_Click($Script:HistoryLoadHandler)
 $lsbox_History.Add_MouseDoubleClick($Script:HistoryLoadHandler)
 
 $btn_HistoryCopy.Add_Click({
     $Item = $lsbox_History.SelectedItem
-    if ($Item -and $Item.Tag.CommandLine) {
-      [System.Windows.Clipboard]::SetText($Item.Tag.CommandLine)
-      Write-Host "Copied to Clipboard: [$($Item.Tag.CommandLine)]"
-      $txtblk_StatusBar.Text = "Command line copied to the clipboard"
-    }
+    if ($Item) { Copy-HistoryEntry -Entry $Item.Tag }
   })
 
 $btn_HistoryClear.Add_Click({
@@ -2608,11 +2813,11 @@ $MenuItem_CheckForUpdates.Add_Click({
       $result = & $Script:TestForUpdate $Script:ReleasesApiUrl $Script:UpdateCheckHeaders $Script:ScriptVersion
       Write-Host "Update available: $($result.UpdateAvailable) | Installed [$($Script:ScriptVersion)] | Latest [$($result.LatestVersion)]"
       Show-UpdateAvailable -Result $result
-      if (-not $result.UpdateAvailable) { $txtblk_StatusBar.Text = "You're running the latest version" }
+      if (-not $result.UpdateAvailable) { Set-StatusBar -Text "You're running the latest version" }
     }
     catch {
       Write-Host "Update check failed: $($_.Exception.Message)"
-      $txtblk_StatusBar.Text = "Update check failed: $($_.Exception.Message)"
+      Set-StatusBar -Warning -Text "Update check failed: $($_.Exception.Message)"
     }
   })
 
