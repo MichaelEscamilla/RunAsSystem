@@ -658,8 +658,8 @@ function Set-RunningState {
     $Control.IsEnabled = -not $Running
   }
 
-  # Cancel only exists while something is running
-  $btn_Cancel.Visibility = if ($Running) { 'Visible' } else { 'Collapsed' }
+  # Stop only exists while something is running
+  $btn_Stop.Visibility = if ($Running) { 'Visible' } else { 'Collapsed' }
 
   if ($Running) {
     $btn_Run.IsEnabled = $false
@@ -692,7 +692,7 @@ function Set-ResultDisplay {
     'Success' { $formRunAsSystem.FindResource('Success') }
     'Reboot' { $formRunAsSystem.FindResource('Accent') }
     'Failure' { $formRunAsSystem.FindResource('Danger') }
-    { $_ -in 'Cancelled', 'StoppedWaiting' } { $formRunAsSystem.FindResource('TextMuted') }
+    { $_ -in 'Stopped', 'Cancelled', 'StoppedWaiting' } { $formRunAsSystem.FindResource('TextMuted') }
     default { $formRunAsSystem.FindResource('Text') }
   }
 
@@ -741,15 +741,6 @@ function Start-SystemRun {
   }
 
   Set-RunningState -Running $true
-  # Say up front that an MSI can't really be cancelled (see Stop-SystemRun)
-  if ($Spec.Type -in 'MSI', 'MSP') {
-    $btn_Cancel.Content = 'Stop Waiting'
-    $btn_Cancel.ToolTip = "Stop waiting for this install. Windows Installer keeps running it in the background."
-  }
-  else {
-    $btn_Cancel.Content = 'Cancel'
-    $btn_Cancel.ToolTip = "Stop the installer and anything it started"
-  }
   $ModeText = if ($State.Mode -eq 'PsExec') { 'Interactive (PsExec)' } else { 'Session 0' }
   Set-ResultDisplay -ExitCodeText '...' -Meaning 'Running as NT AUTHORITY\SYSTEM' -Details "$ModeText  |  Started $($Script:CurrentRun.Started.ToString('T'))"
   Write-Host "Running as SYSTEM [$($State.Mode)]: $($Script:CurrentRun.CommandRun)"
@@ -847,17 +838,12 @@ function Stop-SystemRun {
   # Ending that process doesn't stop the service, and stopping the service would affect every install
   # on the device, so for MSI and MSP this only stops waiting.
   $IsWindowsInstaller = $Run.Spec.Type -in 'MSI', 'MSP'
-  if ($IsWindowsInstaller) {
-    $Answer = [System.Windows.MessageBox]::Show("Stop waiting for this install?`n`nWindows Installer will keep running the install in the background until it finishes, and the log will keep being written. This only stops Run As SYSTEM waiting for it, so the exit code won't be recorded.`n`nUninstall afterwards if you need to undo it.", "Run As SYSTEM - Stop Waiting", "YesNo", "Warning")
-  }
-  else {
-    $Answer = [System.Windows.MessageBox]::Show("Stop the installer?`n`nThe installer and anything it started are ended immediately, so the software may be left partly installed.`n`nAnything it handed to the Windows Installer service (an MSI it runs) keeps going.", "Run As SYSTEM - Cancel", "YesNo", "Warning")
-  }
+  $Answer = [System.Windows.MessageBox]::Show("Stop the running process?`n`nThe process and anything it started are ended immediately, so the software may be left partly installed.`n`nMSI installs (including an MSI started by another process) can't be stopped this way. Windows Installer keeps running them in the background until they finish, and the log keeps being written. Run As SYSTEM only stops waiting, so the exit code won't be recorded. Uninstall afterwards if you need to undo it.", "Run As SYSTEM - Stop", "YesNo", "Warning")
   if ($Answer -ne 'Yes') { return }
   # The timer keeps running while the prompt is open, so the run may have finished in the meantime
   if ($Script:CurrentRun -ne $Run) { return }
 
-  Write-Host "Cancelling run: [$($Run.CommandRun)]"
+  Write-Host "Stopping run: [$($Run.CommandRun)]"
   $Note = $null
   try {
     $ProcessIds = @(Get-RunProcessId -Run $Run)
@@ -873,7 +859,7 @@ function Stop-SystemRun {
     & "$env:SystemRoot\System32\taskkill.exe" /PID $ProcessId /T /F 2>&1 | ForEach-Object { Write-Host "  $_" }
   }
   if ($ProcessIds.Count -eq 0 -and -not $IsWindowsInstaller) {
-    $Note = "The installer process couldn't be found, so only the $(if ($Run.TaskName) { 'Scheduled Task' } else { 'PsExec client' }) was stopped. Check Task Manager for anything still running."
+    $Note = "The process couldn't be found, so only the $(if ($Run.TaskName) { 'Scheduled Task' } else { 'PsExec client' }) was stopped. Check Task Manager for anything still running."
     Write-Host $Note
   }
 
@@ -885,7 +871,7 @@ function Stop-SystemRun {
     try { $Run.Process.Kill() } catch {}
   }
 
-  Complete-SystemRun -Cancelled -StoppedWaiting:$IsWindowsInstaller -ErrorMessage $Note
+  Complete-SystemRun -Stopped -WindowsInstaller:$IsWindowsInstaller -ErrorMessage $Note
 }
 
 function Complete-SystemRun {
@@ -895,9 +881,9 @@ function Complete-SystemRun {
     [Parameter(Mandatory = $false)]
     [string]$ErrorMessage,
     [Parameter(Mandatory = $false)]
-    [switch]$Cancelled,
+    [switch]$Stopped,
     [Parameter(Mandatory = $false)]
-    [switch]$StoppedWaiting
+    [switch]$WindowsInstaller
   )
 
   $Script:RunTimer.Stop()
@@ -910,18 +896,19 @@ function Complete-SystemRun {
   $ModeText = if ($Run.Mode -eq 'PsExec') { 'Interactive (PsExec)' } else { 'Session 0' }
   $Details = "$ModeText  |  Started $($Run.Started.ToString('T'))  |  Duration $($Duration.ToString('hh\:mm\:ss'))"
 
-  if ($StoppedWaiting) {
-    $Meaning = 'Stopped waiting - Windows Installer is still running the install in the background. Check the log for the result.'
-    $Category = 'StoppedWaiting'
+  if ($Stopped) {
+    $Meaning = if ($WindowsInstaller) {
+      'Stopped waiting - Windows Installer is still running the install in the background. Check the log for the result.'
+    }
+    elseif ($ErrorMessage) {
+      "Stopped - $ErrorMessage"
+    }
+    else {
+      'Stopped - the process and anything it started were ended'
+    }
+    $Category = 'Stopped'
     Set-ResultDisplay -ExitCodeText 'Stopped' -Meaning $Meaning -Details $Details -Category $Category
-    Write-Host "Stopped waiting for the install (Windows Installer keeps running it)"
-  }
-  elseif ($Cancelled) {
-    $Meaning = 'Cancelled - the installer was stopped'
-    if ($ErrorMessage) { $Meaning += ". $ErrorMessage" }
-    $Category = 'Cancelled'
-    Set-ResultDisplay -ExitCodeText 'Cancelled' -Meaning $Meaning -Details $Details -Category $Category
-    Write-Host "Run cancelled"
+    Write-Host "Run stopped: $Meaning"
   }
   elseif ($null -ne $ExitCode) {
     $Info = Get-ExitCodeInfo -ExitCode $ExitCode
@@ -1080,14 +1067,15 @@ function Update-HistoryList {
     $CodeBrush = switch ($Entry.Category) {
       'Success' { $formRunAsSystem.FindResource('Success') }
       'Reboot' { $formRunAsSystem.FindResource('Accent') }
-      { $_ -in 'Cancelled', 'StoppedWaiting' } { $formRunAsSystem.FindResource('TextMuted') }
+      { $_ -in 'Stopped', 'Cancelled', 'StoppedWaiting' } { $formRunAsSystem.FindResource('TextMuted') }
       default { $formRunAsSystem.FindResource('Danger') }
     }
 
     # Line 1: File name and exit code
     $Line1 = New-Object System.Windows.Controls.DockPanel
     $Code = New-Object System.Windows.Controls.TextBlock
-    $Code.Text = if ($Entry.Category -eq 'Cancelled') { 'Cancelled' } elseif ($Entry.Category -eq 'StoppedWaiting') { 'Stopped' } elseif ($null -ne $Entry.ExitCode) { [string]$Entry.ExitCode } else { 'Error' }
+    # 'Cancelled' and 'StoppedWaiting' were written by pre-release builds before they became 'Stopped'
+    $Code.Text = if ($Entry.Category -in 'Stopped', 'Cancelled', 'StoppedWaiting') { 'Stopped' } elseif ($null -ne $Entry.ExitCode) { [string]$Entry.ExitCode } else { 'Error' }
     $Code.Foreground = $CodeBrush
     $Code.FontWeight = 'SemiBold'
     $Code.Margin = '8,0,0,0'
@@ -2640,7 +2628,7 @@ Add-Type -AssemblyName WindowsBase
                 ToolTip="Copy the command line"
                 Content="&#xE8C8;"/>
           </Grid>
-          <!-- Cancel is a separate button rather than Run changing into Cancel, so double-clicking Run can't stop the install -->
+          <!-- Stop is a separate button rather than Run changing into Stop, so double-clicking Run can't stop the process -->
           <Grid Grid.Row="11"
               Margin="0,5.5,0,0">
             <Grid.ColumnDefinitions>
@@ -2653,14 +2641,14 @@ Add-Type -AssemblyName WindowsBase
                 ToolTip="Ctrl+Enter or F5"
                 Content="Run as SYSTEM"/>
             <Button Grid.Column="1"
-                Name="btn_Cancel"
+                Name="btn_Stop"
                 Width="140"
                 FontSize="16"
                 Foreground="{StaticResource Danger}"
                 BorderBrush="{StaticResource Danger}"
                 Visibility="Collapsed"
-                ToolTip="Stop the installer and anything it started"
-                Content="Cancel"/>
+                ToolTip="Stop the running process and anything it started. An MSI install keeps running in Windows Installer."
+                Content="Stop"/>
           </Grid>
 
           <!-- RESULT -->
@@ -2902,7 +2890,7 @@ $btn_CommandLine_Copy.Add_Click({
 
 #### Run ####
 $btn_Run.Add_Click({ Start-SystemRun })
-$btn_Cancel.Add_Click({ Stop-SystemRun })
+$btn_Stop.Add_Click({ Stop-SystemRun })
 
 #### Keyboard Shortcuts ####
 # Preview so the shortcuts work whichever control has focus. Each one only acts when its button is enabled,

@@ -22,9 +22,9 @@ Make it easy to run MSI and EXE installers (and scripts) as SYSTEM to test insta
 | MSI log name | `<installer file name>.log` next to the installer, e.g. `Setup.msi.log` | The request said "match the installer but add .log", which was taken literally. If `Setup.log` is preferred, change `Get-DefaultLogPath` |
 | Working directory | The installer's own folder | Matches ConfigMgr and Intune |
 | Copy to a local cache first | **Not done** | The owner said it wasn't needed |
-| Cancel button | Added 2026-10-09. A red **Cancel** button appears next to Run during a run and asks for confirmation. `Get-RunProcessId` finds the installer's process by the installer path in its command line, started after the run began, skipping this app and the local PsExec client. `taskkill /T /F` then ends that process and its whole tree. After that it stops the scheduled task or the PsExec client, in case the search missed something. The run is recorded as **Cancelled** (grey) in the result and in history. **For MSI and MSP the button says "Stop Waiting"**, the prompt warns that Windows Installer keeps running the install, and the run is recorded as **Stopped** (category `StoppedWaiting`) | Stopping the task only ends the process it launched directly, and killing PsExec only ends the local client, so bootstrapper and PSADT children kept running. Cancel is a separate button so that double-clicking Run can't cancel. The Windows Installer service is never matched, because its command line doesn't contain the installer path |
-| Really cancelling an MSI | **Not done** (2026-10-09). Lab testing showed the install carried on after Cancel. The `msiexec.exe /i` client exits, but the Windows Installer service (`msiexec /V`) keeps running the install. The options considered were: stopping the service, rejected because it affects every MSI install on the device and can leave a half-applied install; and a clean cancel through the MSI API's UI callback (rolls back, exit `1602`), rejected because it needs a SYSTEM-side host process instead of running `msiexec.exe` directly | The owner is fine with a warning: stopping an MSI partway through is part of testing, and you can uninstall afterwards |
-| Timeout | **Not done** | The owner said it wasn't needed. Use Cancel instead |
+| Stop button | Added 2026-10-09. A red **Stop** button (`btn_Stop`) appears next to Run during a run. It uses the same label and the same confirmation prompt for every file type, and the prompt explains the MSI behaviour. `Get-RunProcessId` finds the process by the installer path in its command line, started after the run began, skipping this app and the local PsExec client. `taskkill /T /F` then ends that process and its whole tree. After that it stops the scheduled task or the PsExec client, in case the search missed something. The run is recorded as **Stopped** (category `Stopped`, grey). Only the text underneath differs for MSI and MSP ("Stopped waiting - Windows Installer is still running the install..."). Pre-release builds wrote `Cancelled` and `StoppedWaiting`, and those still display as Stopped | Stopping the task only ends the process it launched directly, and killing PsExec only ends the local client, so bootstrapper and PSADT children kept running. One label and one prompt was the owner's preference: the action is the same whatever the file type. Stop is a separate button so that double-clicking Run can't stop anything. The Windows Installer service is never matched, because its command line doesn't contain the installer path |
+| Really stopping an MSI | **Not done** (2026-10-09). Lab testing showed the install carried on after it was stopped. The `msiexec.exe /i` client exits, but the Windows Installer service (`msiexec /V`) keeps running the install. The options considered were: stopping the service, rejected because it affects every MSI install on the device and can leave a half-applied install; and a clean cancel through the MSI API's UI callback (rolls back, exit `1602`), rejected because it needs a SYSTEM-side host process instead of running `msiexec.exe` directly | The owner is fine with a warning: stopping an MSI partway through is part of testing, and you can uninstall afterwards |
+| Timeout | **Not done** | The owner said it wasn't needed. Use Stop instead |
 | 32-bit (Intune-style) launch | **Not done** | The owner said it wasn't needed |
 | Detection-rule help (new Uninstall registry entries) | **Not now** | Possible later |
 | History | `%LOCALAPPDATA%\RunAsSystem\History.json`, last 50 runs, with Load, Copy and Clear | It saves locally even when the script is launched with `iex` |
@@ -75,9 +75,9 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 
 ## Known Limitations
 
-- There's no timeout. An installer that waits for input in Session 0 runs until you click **Cancel**.
-- Cancel finds processes by the installer path in their command line. A child process that doesn't have the path in its command line is still stopped, because it's in the tree. A process the installer hands work to outside its tree is not stopped, for example a service it starts or an MSI it passes to the Windows Installer service.
-- **An MSI can't be cancelled.** Stop Waiting leaves Windows Installer finishing the install in the background, confirmed in the lab. The same applies to an EXE that runs an MSI internally. Starting another MSI before it finishes returns **1618** (another installation is in progress).
+- There's no timeout. An installer that waits for input in Session 0 runs until you click **Stop**.
+- Stop finds processes by the installer path in their command line. A child process that doesn't have the path in its command line is still stopped, because it's in the tree. A process the installer hands work to outside its tree is not stopped, for example a service it starts or an MSI it passes to the Windows Installer service.
+- **An MSI can't be stopped.** Stop leaves Windows Installer finishing the install in the background, confirmed in the lab. The same applies to an EXE that runs an MSI internally. Starting another MSI before it finishes returns **1618** (another installation is in progress).
 - PsExec rebuilds the argument list it passes on, so MSI properties with quoted values containing spaces may not reach msiexec exactly as typed. Session 0 mode passes them unchanged.
 - `-Arguments` isn't passed on when the script relaunches itself as admin. Only `-FilePath` is.
 - Mapped drive letters aren't visible to elevated apps or to SYSTEM. The app tells the user to use the UNC path instead.
@@ -94,10 +94,10 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
   - keyboard shortcuts
   - the hex exit code
 - [x] Test the keyboard shortcuts in the app. The owner confirmed they all work.
-- [ ] Test Cancel in the lab, in both Session 0 and PsExec modes, with:
+- [ ] Test Stop in the lab, in both Session 0 and PsExec modes, with:
   - an EXE bootstrapper that starts a child process
   - a PSADT script
-  - an MSI, which should show "Stop Waiting" and the warning (it was already confirmed that the install itself carries on)
+  - an MSI, which should show the "Stopped waiting" text in the result (it was already confirmed that the install itself carries on)
   - a run that finishes while the confirmation prompt is open
 - [ ] Run the elevated tests above.
 - [ ] Add screenshots to `Images/` and the README.
