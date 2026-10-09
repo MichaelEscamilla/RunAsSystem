@@ -46,7 +46,7 @@ The installer's own folder is always used as the working directory, the same as 
 ## MSI Options
 - **Action**: Install (`/i`), Uninstall (`/x`) or Repair (`/fvomus`).
 - **UI**: Silent (`/qn`), Basic (`/qb`), Basic with no cancel (`/qb!`), Passive (`/passive`) or Full UI.
-- **Log**: a verbose log (`/l*v`) is on by default. It's written next to the installer with `.log` added to the installer's file name (for example `Setup.msi` → `Setup.msi.log`). You can change the path.
+- **Log**: a verbose log (`/l*v`) is on by default. It's written next to the installer, named after the installer and the action: `Setup.msi.Install.log`, `Setup.msi.Uninstall.log`, `Setup.msi.Repair.log`, or `Update.msp.Patch.log` for a patch. Changing the action updates the name, unless you've typed your own path.
 - **ArgumentList**: anything else to pass to msiexec, such as `ALLUSERS=1 TRANSFORMS="app.mst"` or `/norestart`.
 
 The **Command Line** box shows exactly what will run, and you can copy it with the copy button.
