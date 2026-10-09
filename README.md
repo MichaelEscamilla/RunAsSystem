@@ -47,7 +47,7 @@ The installer's own folder is always used as the working directory, the same as 
 - **Action**: Install (`/i`), Uninstall (`/x`) or Repair (`/fvomus`).
 - **UI**: Silent (`/qn`), Basic (`/qb`), Basic with no cancel (`/qb!`), Passive (`/passive`) or Full UI.
 - **Log**: a verbose log (`/l*v`) is on by default. It's written next to the installer with `.log` added to the installer's file name (for example `Setup.msi` → `Setup.msi.log`). You can change the path.
-- **Properties**: anything else to pass to msiexec, such as `ALLUSERS=1 TRANSFORMS="app.mst"` or `/norestart`.
+- **ArgumentList**: anything else to pass to msiexec, such as `ALLUSERS=1 TRANSFORMS="app.mst"` or `/norestart`.
 
 The **Command Line** box shows exactly what will run, and you can copy it with the copy button.
 
@@ -82,7 +82,7 @@ Install a **Run as SYSTEM...** option for `.msi`, `.msp`, `.exe`, `.ps1`, `.cmd`
 | Parameter | Description |
 | --- | --- |
 | `-FilePath` | Installer to load when the app opens |
-| `-Arguments` | Text to pre-fill in the Arguments/Properties box |
+| `-Arguments` | Text to pre-fill in the ArgumentList box |
 
 ## Things to Know About SYSTEM
 - **Network paths**: SYSTEM connects to shares as the computer account (`DOMAIN\COMPUTER$`). The share needs to allow read access for it, and write access too if the MSI log is written there. The app warns you when the installer is on a network path.
