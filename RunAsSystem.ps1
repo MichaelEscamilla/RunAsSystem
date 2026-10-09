@@ -2686,12 +2686,9 @@ Add-Type -AssemblyName WindowsBase
                 VerticalScrollBarVisibility="Auto"
                 FontFamily="Consolas"
                 FontSize="13"/>
-            <!-- The command line takes up the leftover height, so keep the copy button its normal size -->
             <Button Grid.Column="1"
                 Name="btn_CommandLine_Copy"
                 Style="{StaticResource CopyButton}"
-                Height="56"
-                VerticalAlignment="Top"
                 ToolTip="Copy the command line"
                 Content="&#xE8C8;"/>
           </Grid>
