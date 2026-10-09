@@ -79,6 +79,7 @@ Arguments can contain passwords or license keys, so the arguments and command li
 | `Ctrl+Enter` or `F5` | Run as SYSTEM |
 | `Ctrl+O` | Browse for an installer |
 | `Ctrl+L` | Load the selected history entry |
+| `Ctrl+R` | Reset: clear the file, options and result, as if the tool had just opened (same as the ✕ in the File box) |
 
 ## Drag and Drop While Elevated
 Windows normally blocks drag and drop from Explorer into an elevated window, which is why GetMSIInformation asks you not to run it as administrator. RunAsSystem lets the older `WM_DROPFILES` message through the window's message filter, so drag and drop still works while elevated. You can also paste a path or use **Browse**.

@@ -271,6 +271,29 @@ function Set-FormState {
   Update-CommandPreview
 }
 
+function Reset-Form {
+  # Back to how the window looks when the tool opens. History is saved to disk, so it stays.
+  if ($Script:CurrentRun) { return }
+
+  $txt_FilePath.Text = ''
+  Reset-FormOptions
+  # Forget the last type and default log, so the next file starts like the first one did
+  $Script:LastInstallerType = $null
+  $Script:DefaultLogPath = $null
+  $txt_LogPath.Text = ''
+
+  Set-ResultDisplay -ExitCodeText '--' -Meaning 'Not run yet'
+  $Script:LastLogPath = $null
+  $Script:LastWorkingDirectory = $null
+  $btn_OpenLog.IsEnabled = $false
+  $btn_OpenFolder.IsEnabled = $false
+
+  $lsbox_History.SelectedItem = $null
+  Set-StatusBar -Text $Script:DefaultStatusBarText
+  Write-Host "Form reset"
+  $txt_FilePath.Focus() | Out-Null
+}
+
 function Reset-FormOptions {
   # Everything except the file path, back to the defaults in the XAML
   Set-ComboBoxTag -ComboBox $cmb_MsiAction -Tag '/i'
@@ -684,7 +707,7 @@ function Set-RunningState {
     [bool]$Running
   )
 
-  foreach ($Control in @($txt_FilePath, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $btn_HistoryLoad, $btn_HistoryClear)) {
+  foreach ($Control in @($txt_FilePath, $btn_Reset, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $btn_HistoryLoad, $btn_HistoryClear)) {
     $Control.IsEnabled = -not $Running
   }
 
@@ -1161,7 +1184,7 @@ function Update-HistoryList {
     $Actions.SetBinding([System.Windows.UIElement]::VisibilityProperty, $HoverBinding) | Out-Null
 
     $LoadButton = New-Object System.Windows.Controls.Button
-    $LoadButton.Style = $formRunAsSystem.FindResource('HistoryIconButton')
+    $LoadButton.Style = $formRunAsSystem.FindResource('SmallIconButton')
     # Segoe MDL2 Assets: Upload (load into the form)
     $LoadButton.Content = [string][char]0xE898
     $LoadButton.ToolTip = 'Load this run into the form'
@@ -1172,7 +1195,7 @@ function Update-HistoryList {
     # Nothing to copy when the command line couldn't be decrypted
     if (-not $Entry.ArgumentsUnreadable) {
       $CopyButton = New-Object System.Windows.Controls.Button
-      $CopyButton.Style = $formRunAsSystem.FindResource('HistoryIconButton')
+      $CopyButton.Style = $formRunAsSystem.FindResource('SmallIconButton')
       $CopyButton.Content = [string][char]0xE8C8
       $CopyButton.ToolTip = 'Copy the command line'
       $CopyButton.Tag = $Entry
@@ -2217,8 +2240,8 @@ Add-Type -AssemblyName WindowsBase
       </Setter>
     </Style>
 
-    <!-- Small icon buttons shown on a history entry while the mouse is over it -->
-    <Style x:Key="HistoryIconButton"
+    <!-- Small icon buttons: the hover Load/Copy buttons on history entries and Reset in the file box -->
+    <Style x:Key="SmallIconButton"
         TargetType="Button">
       <Setter Property="Foreground"
           Value="{StaticResource TextMuted}"/>
@@ -2266,6 +2289,11 @@ Add-Type -AssemblyName WindowsBase
                     Value="{StaticResource Accent}"/>
                 <Setter Property="Foreground"
                     Value="{StaticResource AccentText}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled"
+                  Value="False">
+                <Setter Property="Opacity"
+                    Value="0.4"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -2507,7 +2535,16 @@ Add-Type -AssemblyName WindowsBase
                 Content="File"/>
             <TextBox Grid.Column="1"
                 Name="txt_FilePath"
+                Padding="8,0,36,0"
                 ToolTip="Path to the installer. Drag and drop a file anywhere on this window, paste a path, or Browse."/>
+            <!-- Sits inside the right end of the file box; the box's right padding keeps the path from running under it -->
+            <Button Grid.Column="1"
+                Name="btn_Reset"
+                Style="{StaticResource SmallIconButton}"
+                HorizontalAlignment="Right"
+                Margin="0,0,8,0"
+                Content="&#xE894;"
+                ToolTip="Reset - clear the file, options and result (Ctrl+R)"/>
             <Button Grid.Column="2"
                 Name="btn_Browse"
                 ToolTip="Browse for an installer (Ctrl+O)"
@@ -2796,6 +2833,9 @@ $readerformRunAsSystem = New-Object System.Xml.XmlNodeReader $XAMLformRunAsSyste
 # Create Variables for all the controls in the XAML form
 $XAMLformRunAsSystem.SelectNodes("//*[@Name]") | ForEach-Object { Set-Variable -Name ($_.Name) -Value $formRunAsSystem.FindName($_.Name) -Scope Script }
 
+# The status bar text the window opens with, so Reset can put it back
+$Script:DefaultStatusBarText = $txtblk_StatusBar.Text
+
 # Timer that watches a run in progress
 $Script:RunTimer = New-Object System.Windows.Threading.DispatcherTimer
 $Script:RunTimer.Interval = [TimeSpan]::FromMilliseconds(500)
@@ -2923,6 +2963,7 @@ $btn_CommandLine_Copy.Add_Click({
 
 #### Run ####
 $btn_Run.Add_Click({ Start-SystemRun })
+$btn_Reset.Add_Click({ Reset-Form })
 $btn_Stop.Add_Click({ Stop-SystemRun })
 
 #### Keyboard Shortcuts ####
@@ -2941,6 +2982,10 @@ $formRunAsSystem.Add_PreviewKeyDown({
     }
     elseif ($Ctrl -and $_.Key -eq 'L') {
       if ($btn_HistoryLoad.IsEnabled) { & $Script:HistoryLoadHandler }
+      $_.Handled = $true
+    }
+    elseif ($Ctrl -and $_.Key -eq 'R') {
+      if ($btn_Reset.IsEnabled) { Reset-Form }
       $_.Handled = $true
     }
   })
