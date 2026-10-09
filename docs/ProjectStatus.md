@@ -28,6 +28,9 @@ Make it easy to run MSI and EXE installers (and scripts) as SYSTEM to test insta
 | History | `%LOCALAPPDATA%\RunAsSystem\History.json`, last 50 runs, with Load, Copy and Clear | It saves locally even when the script is launched with `iex` |
 | ArgumentList label | The arguments box is labelled **ArgumentList** for every file type. It used to switch between "Properties" and "Arguments". Internal names (`txt_Arguments`, `-Arguments`, the history `Arguments` field) are unchanged | Owner's preference. Leaving the internal names alone keeps old history files and `-Arguments` callers working |
 | Changing the file | If the new file is the same type, all options are kept. If the type is different, everything except the path goes back to the defaults: Install, Silent, log on, ArgumentList empty, Session 0. Only known types are compared, so a half-typed path doesn't clear anything | Settings for one type rarely suit another, for example MSI properties passed to an EXE |
+| Main form layout | The ArgumentList box wraps and grows from one line up to about three (76px), then scrolls. Enter still doesn't add a line break. The result panel is a fixed 118px, and the command line takes whatever height is left (scrolling if needed). The copy button stays 56px tall | The command line is the part that changes length, so it gets the leftover space. The result panel always holds the same content |
+| Exit code display | The decimal code is shown large, with its hex value always shown in small text underneath. The console log includes both | EXE installers often document their codes in hex, and HRESULTs are easier to look up that way |
+| Keyboard shortcuts | `Ctrl+Enter` and `F5` run, `Ctrl+O` browses, `Ctrl+L` loads the selected history entry. They're handled in `PreviewKeyDown` on the window and only act when the matching button is enabled. The button tooltips list the shortcuts | Requested. Checking whether the button is enabled stops a shortcut from starting a second run or loading history during a run |
 | History entries | Each entry shows the file name and exit code, then the time, MSI action and mode, then the arguments on a third line (Consolas, cut off when too long). Load and Copy icon buttons appear beside the exit code only while the mouse is over the entry | Runs of the same installer with different arguments can be told apart, and loading a run takes one click. There's deliberately no "Run Again" button: you should load a run and review it before running it |
 | History encryption | `Arguments` and `CommandLine` are saved encrypted with DPAPI (CurrentUser) as `ArgumentsProtected` and `CommandLineProtected`. Older plain-text files are encrypted the first time they're read. An entry that can't be decrypted (another account or device, or a password reset) is kept, and its arguments are left blank when it's loaded. The entry shows a red warning icon (the tooltip explains it), Copy is disabled, and loading it shows a red status bar message | Arguments can contain passwords and license keys, and they have to be saved so runs can be repeated quickly |
 | Masking secrets on screen or in the console | **Not done** | The owner said it wasn't needed: typing a secret into the tool and sharing your screen are risks the user already understands. Copy uses the real command line |
@@ -78,12 +81,17 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 
 - [x] `git init`, create the GitHub repo `MichaelEscamilla/RunAsSystem` and push.
 - [ ] Test the history encryption in the app: after a run, `History.json` should contain no plain-text arguments, and Load and Copy should still restore them.
-- [ ] UI improvements. Done: arguments line and hover Load/Copy buttons on history entries. Still to discuss:
-  - A multi-line, wrapping Arguments box for long property lists.
+- [ ] UI improvements. Done:
+  - an arguments line and hover Load/Copy buttons on history entries
+  - the ArgumentList label, and resetting options when the file type changes
+  - a wrapping ArgumentList box
+  - a fixed-height result panel, with the command line taking the leftover height
+  - keyboard shortcuts
+  - the hex exit code
+
+  Still to discuss:
   - A resizable window (currently 1100x760 with resizing turned off) that remembers its size and position.
-  - Remember the last run mode, MSI UI level and log checkbox between launches.
-  - Keyboard shortcuts: Ctrl+Enter or F5 to run, Ctrl+O to browse, Ctrl+L to load.
-  - Always show the hex exit code under the decimal one.
+  - Remember the last run mode, MSI UI level and log checkbox between launches. This partly conflicts with resetting to defaults when the file type changes.
 - [ ] Run the elevated tests above.
 - [ ] Add screenshots to `Images/` and the README.
 - [ ] Optionally add a short URL on michaeltheadmin.com (like `msiapp.michaeltheadmin.com`) and update the README.

@@ -680,7 +680,9 @@ function Set-ResultDisplay {
     [Parameter(Mandatory = $false)]
     [string]$Details,
     [Parameter(Mandatory = $false)]
-    [string]$Category
+    [string]$Category,
+    [Parameter(Mandatory = $false)]
+    [string]$HexText
   )
 
   $Brush = switch ($Category) {
@@ -692,6 +694,7 @@ function Set-ResultDisplay {
 
   $txtblk_ExitCode.Text = $ExitCodeText
   $txtblk_ExitCode.Foreground = $Brush
+  $txtblk_ExitCodeHex.Text = $HexText
   $txtblk_ExitMeaning.Text = $Meaning
   $txtblk_RunDetails.Text = $Details
 }
@@ -816,9 +819,8 @@ function Complete-SystemRun {
 
   if ($null -ne $ExitCode) {
     $Info = Get-ExitCodeInfo -ExitCode $ExitCode
-    $CodeText = if ($ExitCode -lt 0 -or $ExitCode -gt 65535) { "$ExitCode ($($Info.Hex))" } else { "$ExitCode" }
-    Set-ResultDisplay -ExitCodeText $CodeText -Meaning $Info.Meaning -Details $Details -Category $Info.Category
-    Write-Host "Exit Code: [$ExitCode] $($Info.Meaning)"
+    Set-ResultDisplay -ExitCodeText "$ExitCode" -HexText $Info.Hex -Meaning $Info.Meaning -Details $Details -Category $Info.Category
+    Write-Host "Exit Code: [$ExitCode] [$($Info.Hex)] $($Info.Meaning)"
     $Meaning = $Info.Meaning
     $Category = $Info.Category
   }
@@ -1613,7 +1615,7 @@ Add-Type -AssemblyName WindowsBase
                 CornerRadius="6">
               <ScrollViewer x:Name="PART_ContentHost"
                   Margin="{TemplateBinding Padding}"
-                  VerticalAlignment="Center"/>
+                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver"
@@ -2356,14 +2358,14 @@ Add-Type -AssemblyName WindowsBase
             <RowDefinition Height="26"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="40"/>
-            <RowDefinition Height="26"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="26"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="56"/>
             <RowDefinition Height="26"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="56"/>
+            <RowDefinition Height="26"/>
+            <RowDefinition Height="118"/>
           </Grid.RowDefinitions>
 
           <!-- INSTALLER -->
@@ -2383,6 +2385,7 @@ Add-Type -AssemblyName WindowsBase
                 ToolTip="Path to the installer. Drag and drop a file anywhere on this window, paste a path, or Browse."/>
             <Button Grid.Column="2"
                 Name="btn_Browse"
+                ToolTip="Browse for an installer (Ctrl+O)"
                 Content="Browse"/>
           </Grid>
           <TextBlock Grid.Row="2"
@@ -2463,8 +2466,15 @@ Add-Type -AssemblyName WindowsBase
                 Name="lbl_Arguments"
                 Padding="0,0,8,0"
                 Content="ArgumentList"/>
+            <!-- Wraps and grows to about three lines for long property lists, then scrolls. Enter still doesn't add a line break -->
             <TextBox Grid.Column="1"
                 Name="txt_Arguments"
+                TextWrapping="Wrap"
+                AcceptsReturn="False"
+                MinHeight="35"
+                MaxHeight="76"
+                Padding="8,3"
+                VerticalScrollBarVisibility="Auto"
                 ToolTip="Arguments for the installer. For MSI files, add properties here (e.g. ALLUSERS=1 TRANSFORMS=&quot;app.mst&quot;)."/>
           </Grid>
 
@@ -2510,11 +2520,16 @@ Add-Type -AssemblyName WindowsBase
                 TextWrapping="Wrap"
                 MinHeight="56"
                 Padding="8,6"
+                VerticalContentAlignment="Top"
+                VerticalScrollBarVisibility="Auto"
                 FontFamily="Consolas"
                 FontSize="13"/>
+            <!-- The command line takes up the leftover height, so keep the copy button its normal size -->
             <Button Grid.Column="1"
                 Name="btn_CommandLine_Copy"
                 Style="{StaticResource CopyButton}"
+                Height="56"
+                VerticalAlignment="Top"
                 ToolTip="Copy the command line"
                 Content="&#xE8C8;"/>
           </Grid>
@@ -2522,6 +2537,7 @@ Add-Type -AssemblyName WindowsBase
               Name="btn_Run"
               Style="{StaticResource AccentButton}"
               Margin="2.5,8,2.5,2.5"
+              ToolTip="Ctrl+Enter or F5"
               Content="Run as SYSTEM"/>
 
           <!-- RESULT -->
@@ -2552,6 +2568,12 @@ Add-Type -AssemblyName WindowsBase
                     FontSize="34"
                     FontWeight="Bold"
                     Foreground="{StaticResource Text}"/>
+                <!-- Hex as well: EXE installers often document their codes in hex, and HRESULTs are easier to look up that way -->
+                <TextBlock Name="txtblk_ExitCodeHex"
+                    FontFamily="Consolas"
+                    FontSize="12"
+                    Margin="0,-4,0,0"
+                    Foreground="{StaticResource TextMuted}"/>
               </StackPanel>
               <StackPanel Grid.Column="1"
                   VerticalAlignment="Center"
@@ -2609,7 +2631,7 @@ Add-Type -AssemblyName WindowsBase
               Columns="3">
             <Button Name="btn_HistoryLoad"
                 Content="Load"
-                ToolTip="Load the selected run back into the form (or double-click it)"/>
+                ToolTip="Load the selected run back into the form (Ctrl+L, or double-click it)"/>
             <Button Name="btn_HistoryCopy"
                 Content="Copy"
                 ToolTip="Copy the command line of the selected run"/>
@@ -2757,6 +2779,26 @@ $btn_CommandLine_Copy.Add_Click({
 
 #### Run ####
 $btn_Run.Add_Click({ Start-SystemRun })
+
+#### Keyboard Shortcuts ####
+# Preview so the shortcuts work whichever control has focus. Each one only acts when its button is enabled,
+# so a shortcut can't start a second run or load history while an installer is running.
+$formRunAsSystem.Add_PreviewKeyDown({
+    $Ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+
+    if ($_.Key -eq 'F5' -or ($Ctrl -and $_.Key -eq 'Return')) {
+      if ($btn_Run.IsEnabled) { Start-SystemRun }
+      $_.Handled = $true
+    }
+    elseif ($Ctrl -and $_.Key -eq 'O') {
+      if ($btn_Browse.IsEnabled) { $btn_Browse.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) }
+      $_.Handled = $true
+    }
+    elseif ($Ctrl -and $_.Key -eq 'L') {
+      if ($btn_HistoryLoad.IsEnabled) { & $Script:HistoryLoadHandler }
+      $_.Handled = $true
+    }
+  })
 
 $btn_OpenLog.Add_Click({
     if ($Script:LastLogPath -and (Test-Path -LiteralPath $Script:LastLogPath)) {

@@ -57,13 +57,23 @@ When the run finishes, the exit code is shown in colour:
 - **Orange**: success with a restart required or started (`3010`, `1641`).
 - **Red**: failure.
 
-Common Windows Installer codes (`1603`, `1618`, `1619`, `1638`, and others) have plain-English descriptions. Any other code falls back to the description Windows has for that number.
+Common Windows Installer codes (`1603`, `1618`, `1619`, `1638`, and others) have plain-English descriptions. Any other code falls back to the description Windows has for that number. The hex value is shown under the code (for example `0x80070002`), which is handy for EXE installers that document their codes in hex.
 
 ## History
 Every run is saved to `%LOCALAPPDATA%\RunAsSystem\History.json`. It keeps the last 50 runs, including runs launched with `iex`.
-- **Load** (or double-click a run) puts the file, options, arguments and run mode back into the form, ready to run again.
-- **Copy** copies the run's command line.
+- Each entry shows the file, exit code, time, run mode and arguments.
+- **Load** (or double-click a run, or the load icon that appears when you hover over a run) puts the file, options, arguments and run mode back into the form, ready to run again.
+- **Copy** (or the copy icon on hover) copies the run's command line.
 - **Clear** empties the history.
+
+Arguments can contain passwords or license keys, so the arguments and command line are encrypted with Windows DPAPI. Only your Windows account on that device can read them. If you copy `History.json` to another device, the runs still appear, but their arguments can't be loaded. Those entries show a warning icon.
+
+## Keyboard Shortcuts
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Enter` or `F5` | Run as SYSTEM |
+| `Ctrl+O` | Browse for an installer |
+| `Ctrl+L` | Load the selected history entry |
 
 ## Drag and Drop While Elevated
 Windows normally blocks drag and drop from Explorer into an elevated window, which is why GetMSIInformation asks you not to run it as administrator. RunAsSystem lets the older `WM_DROPFILES` message through the window's message filter, so drag and drop still works while elevated. You can also paste a path or use **Browse**.
