@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 2026.10.6.0
+.VERSION 2026.10.9.0
 
 .GUID 8f2d6c1e-4b7a-4e3f-9a5d-2c8b1e7f6a40
 
@@ -25,6 +25,18 @@
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
+2026.10.9.0   - Arguments and command lines saved in history are now encrypted with DPAPI, so only your Windows account on that device can read them
+              History entries show their arguments, with Load and Copy buttons when you hover over an entry
+              New Current user run mode: runs the installer as the account running the tool, through a scheduled task
+              New Stop button that ends the running process and anything it started (an MSI install keeps running in Windows Installer)
+              New Reset button (or Ctrl+R) that puts the window back to how it opens
+              Keyboard shortcuts: Ctrl+Enter or F5 to run, Ctrl+O to browse, Ctrl+L to load from history, Ctrl+R to reset
+              The hex exit code is always shown under the decimal code
+              MSI logs are named after the action, for example Setup.msi.Install.log and Setup.msi.Uninstall.log
+              Choosing a file of a different type resets the options
+              The arguments box is now called ArgumentList, wraps long text and grows to about three lines
+              Sections are grouped into cards, with a new window background colour
+              Removed the /norestart checkbox (type /norestart in ArgumentList when needed)
 2026.10.6.0   - Initial release
 
 .PRIVATEDATA
@@ -70,7 +82,7 @@ param (
 # Script Name
 $Script:ScriptName = "RunAsSystem.ps1"
 # Script Version
-[System.Version]$Script:ScriptVersion = "2026.10.6.0"
+[System.Version]$Script:ScriptVersion = "2026.10.9.0"
 # App Data folder (history and right-click menu files)
 $Script:AppDataPath = "$env:LOCALAPPDATA\RunAsSystem"
 $Script:HistoryPath = "$Script:AppDataPath\History.json"
@@ -96,10 +108,17 @@ $Script:UpdateCheckHeaders = @{
 }
 # Get the Security Principal
 $Script:currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+# The account running this script, used by Current user mode
+$Script:CurrentUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$Script:CurrentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 # Windows PowerShell 5.1 path (used for the right-click menu and relaunching)
 $Script:WindowsPowerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 # Current run state
 $Script:CurrentRun = $null
+# Type of the last file loaded, so the options can be reset when the type changes
+$Script:LastInstallerType = $null
+# The log path last filled in automatically, so a path that was typed in isn't overwritten
+$Script:DefaultLogPath = $null
 # michaeltheadmin.com Icon
 $Script:WindowIconBase64 = "AAABAAEAIBwAAAEAIACYDgAAFgAAACgAAAAgAAAAOAAAAAEAIAAAAAAAcA4AAMQOAADEDgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABaSFoNRkZGEUtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEFRGRhFaSEgNAAAAAAAAAABUVFQLUkxPrFNOUOlRTE7tUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7VROUOhSTU+qTExMCU5KTH5lYWP/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bmxt/2RfYf9OSkx6TkhLtWtoaf94eHj/dnZ2/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3Z2dv94eHj/aWZn/05IS69OSUuxamdo/3h4eP9mZGX/Uk1P/05JS/9OSUv/VVFT/1VRUv9OSUv/T0pM/09KTP9PSkz/T0pM/09KTP9PSkz/T0pM/09KTP9PSkz/T0pM/09KTP9PSkz/TklL/1VRU/9VUVP/TklL/05JS/9STlD/ZmRl/3h4eP9oZWb/T0lMqk9JTLBqZ2j/eHl4/1dUVf90cHH/rqys/62rrP9rZ2j/b2tt/66srP+npaX/p6Wl/6elpf+npaX/p6Wl/6elpf+npaX/p6Wl/6elpf+npaX/p6Wl/6elpf+tq6z/a2do/29rbP+urKz/rays/3Bsbv9YVVb/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/U1BR/5GPkP/09PT/8/Pz/399ff+Hg4X/9PT0/+jo6P/o6Oj/6Ojo/+jo6P/o6Oj/6Ojo/+jo6P/o6Oj/6Ojo/+jo6P/o6Oj/6Ojo//Pz8/9/fX3/hoOE//T09P/z9PP/i4iJ/1VRUv94eXn/aGVm/09JTKpPSUywamdo/3h5eP9VUlP/hIGC/9PS0v/S0dH/dXJz/3t3ef/T0tL/ycjI/8rJyv/Kycr/ycjI/8nIyP/Kycr/ysnK/8nIyP/JyMj/ysnK/8vKyf/Lycj/1NLR/3dzc/98eHj/1dPS/9TT0f9/fHz/V1NU/3h5ef9oZWb/T0lMqk9JTLBqZ2j/eHl4/19cXv9TTU//V1JU/1dSVP9TTlD/VE9R/1dSVP9XUlT/V1NV/1dTVf9XUlT/V1JU/1dTVf9XU1X/V1JU/1dSVP9XU1X/WFNU/1hSVP9ZU1T/VU9Q/1VPUP9ZU1T/WVNU/1JNTv9gXV7/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/V1NV/3x4ef/Hx8j/v76//8HAwf/BwMD/v76//8jHx/9ybnD/dnN0/8jIyP/Ix8f/cm9w/3Vxc//Ix8j/yMfI/4B2cP85VYL/LXrf/y933P8xed7/MXne/y933P8tet7/Q1p//2NaU/94eXn/aGVm/09JTKpPSUywamdo/3h5eP9UUFL/jImK//L09P/n6Oj/5+jo/+fo6P/n6Oj/8/Pz/4B9f/+Gg4T/9PT0//L08/+Afn//hICC//L09P/y9PT/k4h//zRblv8jjf//J4n//yeJ//8nif//J4n//yON//9AYJL/Y1lQ/3h5ef9oZWb/T0lMqk9JTLBqZ2j/eHl4/1hUVv95dHP/v7u3/7izr/+3tLP/tLO0/7GwsP+5t7j/cGxu/3Rwcf+5uLj/ubi4/3Bsbv9ybnD/ubi4/7m4uP98c27/PVV9/y5zzf8xcMr/NHTO/zR0zv8xcMr/LnPN/0RXef9jWlX/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/YFxd/01LUv9ITVz/SE5d/0pJUP9TTU7/XFdZ/1tXWf9VUVL/VlFT/1tXWf9bV1n/VVFT/1ZRU/9cV1n/XFdZ/1VQU/9ZU1L/ZFtY/2RbV/9ZUEz/WlFN/2RbWP9kW1j/VlBQ/19cXv94eXn/aGVm/09JTKpPSUywamdo/3h5eP9jWFH/QF+Q/ymE+f8phPn/OFiJ/4yCe//e3t7/3d3d/3p2eP9/fH3/3t7e/93e3f96d3j/fXl7/93e3v/d3t7/fXp7/4B9fv/f3t7/3t3d/3p2d/9/fH3/397e/97e3f+DgIH/VlJT/3h5ef9oZWb/T0lMqk9JTLBqZ2j/eHl4/2NYT/8+Ypr/JI3//ySN//81WpL/lYuC//Pz8//y8vL/gHx+/4aDhP/z8/P/8vPy/4B9fv+DgIL/8vPz//Lz8/+DgYL/h4SF//Pz8//y8vL/f3x9/4aDhP/z8/P/8vPy/4qIiP9VUVL/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/YFhV/0ZTbv87aaj/O2mo/0NRbP9waGX/m5iZ/5uYmf9mYWP/aGRm/5uYmf+bmJn/ZmJj/2djZf+bmJn/m5iZ/2djZf9pZWb/m5iZ/5uYmf9lYWL/amZo/6Cdnv+fnZ7/a2Zo/1lVV/94eXn/aGVm/09JTKpOSUuxamdo/3d4eP9nZmj/XFVT/2BUTP9gVEz/X1hV/1dUVv9QTE7/UExO/1lVV/9ZVVb/UExO/1BMTv9ZVVf/WVVW/1BMTv9QTE7/WVVW/1hVVv9QTE7/UExO/1lVV/9ZVVb/UE1O/1FNTv9WUlT/aWdo/3d4eP9oZWb/TkhLq09JTLNraGn/eHl5/3d3d/93eHj/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4eP93d3f/eHl4/2hmZ/9OSEuuUUpMbWRfYf9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/amhp/2poaf9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9samv/Yl1f/1BLS2hRUVECUUtNjFNNT89QS0zTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEpM01BLTdFQS03yUEtN8FBLTdFQSkzTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEtM01NNT89RTE6IfHx8AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFNMT7lTTVCmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU01Qs1JNT7gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTTU1RWFNV/1NOUIhUTE9pVFBSaExMTBYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABRTE9mVlFS11NOUOJWUVLdUEtQNQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP//////////wAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//n////5////+B////wf///////////8="
 
@@ -158,14 +177,59 @@ function Get-InstallerType {
   return $null
 }
 
+function Get-ModeText {
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Mode,
+    [Parameter(Mandatory = $false)]
+    [switch]$Short
+  )
+
+  switch ($Mode) {
+    'PsExec' { if ($Short) { 'PsExec' } else { 'Interactive (PsExec)' } }
+    'CurrentUser' { 'Current user' }
+    default { 'Session 0' }
+  }
+}
+
 function Get-DefaultLogPath {
   param (
     [Parameter(Mandatory = $true)]
-    [string]$Path
+    [string]$Path,
+    [Parameter(Mandatory = $false)]
+    [string]$MsiAction
   )
 
-  # Same name as the installer with '.log' added, in the same folder. Example: Setup.msi -> Setup.msi.log
-  return "$Path.log"
+  # The installer's name plus the action, in the same folder (Setup.msi -> Setup.msi.Uninstall.log),
+  # so the install, uninstall and repair logs of one MSI don't overwrite each other
+  $ActionName = if ([System.IO.Path]::GetExtension($Path) -eq '.msp') {
+    'Patch'
+  }
+  else {
+    switch ($MsiAction) {
+      '/x' { 'Uninstall' }
+      '/fvomus' { 'Repair' }
+      default { 'Install' }
+    }
+  }
+  return "$Path.$ActionName.log"
+}
+
+function Update-DefaultLogPath {
+  param (
+    [Parameter(Mandatory = $false)]
+    [switch]$Force
+  )
+
+  $Path = $txt_FilePath.Text.Trim().Trim('"')
+  if ((Get-InstallerType -Path $Path) -notin 'MSI', 'MSP') { return }
+
+  # Only replace the default name (or an empty box), so a log path that was typed in is kept
+  $Current = $txt_LogPath.Text.Trim().Trim('"')
+  if ($Force -or -not $Current -or $Current -eq $Script:DefaultLogPath) {
+    $Script:DefaultLogPath = Get-DefaultLogPath -Path $Path -MsiAction (Get-ComboBoxTag -ComboBox $cmb_MsiAction)
+    $txt_LogPath.Text = $Script:DefaultLogPath
+  }
 }
 
 function Get-ComboBoxTag {
@@ -194,16 +258,28 @@ function Set-ComboBoxTag {
   }
 }
 
+function Set-StatusBar {
+  param (
+    [Parameter(Mandatory = $true)]
+    [string]$Text,
+    [Parameter(Mandatory = $false)]
+    [switch]$Warning
+  )
+
+  # Every message sets the colour, so a warning doesn't stay red after the next normal message
+  $txtblk_StatusBar.Text = $Text
+  $txtblk_StatusBar.Foreground = if ($Warning) { $formRunAsSystem.FindResource('Danger') } else { $formRunAsSystem.FindResource('TextMuted') }
+}
+
 function Get-FormState {
   [PSCustomObject]@{
     FilePath   = $txt_FilePath.Text.Trim().Trim('"')
     MsiAction  = Get-ComboBoxTag -ComboBox $cmb_MsiAction
     MsiUI      = Get-ComboBoxTag -ComboBox $cmb_MsiUI
-    NoRestart  = [bool]$chk_NoRestart.IsChecked
     LogEnabled = [bool]$chk_Log.IsChecked
     LogPath    = $txt_LogPath.Text.Trim().Trim('"')
     Arguments  = $txt_Arguments.Text.Trim()
-    Mode       = if ($rad_PsExec.IsChecked) { 'PsExec' } else { 'Session0' }
+    Mode       = if ($rad_PsExec.IsChecked) { 'PsExec' } elseif ($rad_CurrentUser.IsChecked) { 'CurrentUser' } else { 'Session0' }
   }
 }
 
@@ -217,13 +293,49 @@ function Set-FormState {
   $txt_FilePath.Text = $State.FilePath
   Set-ComboBoxTag -ComboBox $cmb_MsiAction -Tag $State.MsiAction
   Set-ComboBoxTag -ComboBox $cmb_MsiUI -Tag $State.MsiUI
-  $chk_NoRestart.IsChecked = [bool]$State.NoRestart
   $chk_Log.IsChecked = [bool]$State.LogEnabled
   if ($State.LogPath) { $txt_LogPath.Text = $State.LogPath }
   $txt_Arguments.Text = $State.Arguments
-  if ($State.Mode -eq 'PsExec') { $rad_PsExec.IsChecked = $true } else { $rad_Session0.IsChecked = $true }
+  switch ($State.Mode) {
+    'PsExec' { $rad_PsExec.IsChecked = $true }
+    'CurrentUser' { $rad_CurrentUser.IsChecked = $true }
+    default { $rad_Session0.IsChecked = $true }
+  }
   $txt_LogPath.IsEnabled = [bool]$chk_Log.IsChecked
   Update-CommandPreview
+}
+
+function Reset-Form {
+  # Back to how the window looks when the tool opens. History is saved to disk, so it stays.
+  if ($Script:CurrentRun) { return }
+
+  $txt_FilePath.Text = ''
+  Reset-FormOptions
+  # Forget the last type and default log, so the next file starts like the first one did
+  $Script:LastInstallerType = $null
+  $Script:DefaultLogPath = $null
+  $txt_LogPath.Text = ''
+
+  Set-ResultDisplay -ExitCodeText '--' -Meaning 'Not run yet'
+  $Script:LastLogPath = $null
+  $Script:LastWorkingDirectory = $null
+  $btn_OpenLog.IsEnabled = $false
+  $btn_OpenFolder.IsEnabled = $false
+
+  $lsbox_History.SelectedItem = $null
+  Set-StatusBar -Text $Script:DefaultStatusBarText
+  Write-Host "Form reset"
+  $txt_FilePath.Focus() | Out-Null
+}
+
+function Reset-FormOptions {
+  # Everything except the file path, back to the defaults in the XAML
+  Set-ComboBoxTag -ComboBox $cmb_MsiAction -Tag '/i'
+  Set-ComboBoxTag -ComboBox $cmb_MsiUI -Tag '/qn'
+  $chk_Log.IsChecked = $true
+  $txt_LogPath.IsEnabled = $true
+  $txt_Arguments.Text = ''
+  $rad_Session0.IsChecked = $true
 }
 
 function Get-CommandSpec {
@@ -245,7 +357,6 @@ function Get-CommandSpec {
       $Action = if ($Type -eq 'MSP') { '/p' } else { $State.MsiAction }
       $Parts = @($Action, "`"$InstallerPath`"")
       if ($State.MsiUI) { $Parts += $State.MsiUI }
-      if ($State.NoRestart) { $Parts += '/norestart' }
       if ($State.LogEnabled -and $State.LogPath) {
         $LogPath = $State.LogPath
         $Parts += "/l*v `"$LogPath`""
@@ -346,6 +457,11 @@ function Update-CommandPreview {
   $State = Get-FormState
   $Spec = Get-CommandSpec -State $State
 
+  # While a run is in progress the button shows the elapsed time instead
+  if (-not $Script:CurrentRun) {
+    $btn_Run.Content = if ($State.Mode -eq 'CurrentUser') { 'Run as Current User' } else { 'Run as SYSTEM' }
+  }
+
   if (-not $Spec) {
     $txt_CommandLine.Text = ''
     $btn_Run.IsEnabled = $false
@@ -378,12 +494,20 @@ function Update-FileSelection {
   $panel_MsiOptions.Visibility = if ($IsWindowsInstaller) { 'Visible' } else { 'Collapsed' }
   $panel_MsiLog.Visibility = if ($IsWindowsInstaller) { 'Visible' } else { 'Collapsed' }
   $cmb_MsiAction.IsEnabled = ($Type -eq 'MSI')
-  $lbl_Arguments.Content = if ($IsWindowsInstaller) { 'Properties' } else { 'Arguments' }
 
-  # Default the log next to the installer
-  if ($IsWindowsInstaller) {
-    $txt_LogPath.Text = Get-DefaultLogPath -Path $Path
+  # Settings for one file type rarely suit another (MSI properties passed to an EXE, for example),
+  # so start fresh when the type changes. While a path is being typed the type is briefly unknown,
+  # so only compare known types, otherwise typing would clear the arguments.
+  if ($Type) {
+    if ($Script:LastInstallerType -and $Type -ne $Script:LastInstallerType) {
+      Write-Host "File type changed: [$($Script:LastInstallerType)] -> [$Type], resetting options"
+      Reset-FormOptions
+    }
+    $Script:LastInstallerType = $Type
   }
+
+  # A new file always gets a new default log next to it
+  Update-DefaultLogPath -Force
 
   # File information line
   $txtblk_FileInfo.Foreground = $formRunAsSystem.FindResource('TextMuted')
@@ -502,7 +626,15 @@ function Register-SystemTask {
     [Parameter(Mandatory = $false)]
     [string]$TaskArguments,
     [Parameter(Mandatory = $false)]
-    [string]$WorkingDirectory
+    [string]$WorkingDirectory,
+    # Who the task runs as. The defaults are SYSTEM in session 0. Current user mode passes the user's SID,
+    # 3 (TASK_LOGON_INTERACTIVE_TOKEN: their existing logon, no password, on their desktop) and the run level.
+    [Parameter(Mandatory = $false)]
+    [string]$UserId = 'S-1-5-18',
+    [Parameter(Mandatory = $false)]
+    [int]$LogonType = 5,
+    [Parameter(Mandatory = $false)]
+    [int]$RunLevel = 1
   )
 
   $Service = Connect-TaskService
@@ -511,7 +643,7 @@ function Register-SystemTask {
 
   # Registration Info - the marker identifies tasks this tool owns, so nothing else is ever touched
   $Definition.RegistrationInfo.Author = 'RunAsSystem'
-  $Definition.RegistrationInfo.Description = "$($Script:TaskMarker)`nTemporary task created by Run As SYSTEM to run an installer as NT AUTHORITY\SYSTEM. It has no active trigger, only runs on demand, and is deleted when the run finishes (or automatically when it expires)."
+  $Definition.RegistrationInfo.Description = "$($Script:TaskMarker)`nTemporary task created by Run As SYSTEM to run an installer. It has no active trigger, only runs on demand, and is deleted when the run finishes (or automatically when it expires)."
 
   # Settings
   $Definition.Settings.Enabled = $true
@@ -543,16 +675,16 @@ function Register-SystemTask {
   if ($TaskArguments) { $Action.Arguments = $TaskArguments }
   if ($WorkingDirectory) { $Action.WorkingDirectory = $WorkingDirectory }
 
-  # Principal - SYSTEM, highest privileges
-  $Definition.Principal.UserId = 'S-1-5-18'
-  $Definition.Principal.LogonType = 5
-  $Definition.Principal.RunLevel = 1
+  # Principal - RunLevel 1 = highest available, 0 = limited (not elevated)
+  $Definition.Principal.UserId = $UserId
+  $Definition.Principal.LogonType = $LogonType
+  $Definition.Principal.RunLevel = $RunLevel
 
-  # 6 = CREATE_OR_UPDATE, 5 = TASK_LOGON_SERVICE_ACCOUNT. Two forms - Windows builds differ
-  try { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, $null, $null, 5) }
-  catch { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, 'S-1-5-18', $null, 5) }
+  # 6 = CREATE_OR_UPDATE. Two forms - Windows builds differ
+  try { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, $null, $null, $LogonType) }
+  catch { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, $UserId, $null, $LogonType) }
 
-  Write-Host "Registered Scheduled Task: [\$TaskName]"
+  Write-Host "Registered Scheduled Task: [\$TaskName] as [$UserId] LogonType [$LogonType] RunLevel [$RunLevel]"
   return $Folder.GetTask($TaskName)
 }
 
@@ -622,16 +754,19 @@ function Set-RunningState {
     [bool]$Running
   )
 
-  foreach ($Control in @($txt_FilePath, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_NoRestart, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $btn_HistoryLoad, $btn_HistoryClear)) {
+  foreach ($Control in @($txt_FilePath, $btn_Reset, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $rad_CurrentUser, $btn_HistoryLoad, $btn_HistoryClear)) {
     $Control.IsEnabled = -not $Running
   }
+
+  # Stop only exists while something is running
+  $btn_Stop.Visibility = if ($Running) { 'Visible' } else { 'Collapsed' }
 
   if ($Running) {
     $btn_Run.IsEnabled = $false
     $btn_Run.Content = 'Running...'
   }
   else {
-    $btn_Run.Content = 'Run as SYSTEM'
+    # Update-CommandPreview below puts the Run button text back for the selected mode
     # Restore the per-file-type enabled states
     $cmb_MsiAction.IsEnabled = ((Get-InstallerType -Path $txt_FilePath.Text.Trim().Trim('"')) -eq 'MSI')
     $txt_LogPath.IsEnabled = [bool]$chk_Log.IsChecked
@@ -648,18 +783,22 @@ function Set-ResultDisplay {
     [Parameter(Mandatory = $false)]
     [string]$Details,
     [Parameter(Mandatory = $false)]
-    [string]$Category
+    [string]$Category,
+    [Parameter(Mandatory = $false)]
+    [string]$HexText
   )
 
   $Brush = switch ($Category) {
     'Success' { $formRunAsSystem.FindResource('Success') }
     'Reboot' { $formRunAsSystem.FindResource('Accent') }
     'Failure' { $formRunAsSystem.FindResource('Danger') }
+    { $_ -in 'Stopped', 'Cancelled', 'StoppedWaiting' } { $formRunAsSystem.FindResource('TextMuted') }
     default { $formRunAsSystem.FindResource('Text') }
   }
 
   $txtblk_ExitCode.Text = $ExitCodeText
   $txtblk_ExitCode.Foreground = $Brush
+  $txtblk_ExitCodeHex.Text = $HexText
   $txtblk_ExitMeaning.Text = $Meaning
   $txtblk_RunDetails.Text = $Details
 }
@@ -702,9 +841,10 @@ function Start-SystemRun {
   }
 
   Set-RunningState -Running $true
-  $ModeText = if ($State.Mode -eq 'PsExec') { 'Interactive (PsExec)' } else { 'Session 0' }
-  Set-ResultDisplay -ExitCodeText '...' -Meaning 'Running as NT AUTHORITY\SYSTEM' -Details "$ModeText  |  Started $($Script:CurrentRun.Started.ToString('T'))"
-  Write-Host "Running as SYSTEM [$($State.Mode)]: $($Script:CurrentRun.CommandRun)"
+  $ModeText = Get-ModeText -Mode $State.Mode
+  $RunningAs = if ($State.Mode -eq 'CurrentUser') { $Script:CurrentUserName } else { 'NT AUTHORITY\SYSTEM' }
+  Set-ResultDisplay -ExitCodeText '...' -Meaning "Running as $RunningAs" -Details "$ModeText  |  Started $($Script:CurrentRun.Started.ToString('T'))"
+  Write-Host "Running as [$RunningAs] [$($State.Mode)]: $($Script:CurrentRun.CommandRun)"
 
   try {
     if ($State.Mode -eq 'PsExec') {
@@ -716,7 +856,19 @@ function Start-SystemRun {
     else {
       $TaskName = "$($Script:TaskNamePrefix)$(Get-Date -Format 'yyyyMMdd_HHmmss')"
       $Script:CurrentRun.TaskName = $TaskName
-      $Task = Register-SystemTask -TaskName $TaskName -Execute $Spec.Execute -TaskArguments $Spec.Arguments -WorkingDirectory $Spec.WorkingDirectory
+      $TaskParams = @{
+        TaskName         = $TaskName
+        Execute          = $Spec.Execute
+        TaskArguments    = $Spec.Arguments
+        WorkingDirectory = $Spec.WorkingDirectory
+      }
+      if ($State.Mode -eq 'CurrentUser') {
+        # The account running this script, with the same elevation this script has
+        $TaskParams.UserId = $Script:CurrentUserSid
+        $TaskParams.LogonType = 3
+        $TaskParams.RunLevel = if (Test-IsAdmin) { 1 } else { 0 }
+      }
+      $Task = Register-SystemTask @TaskParams
       try { $null = $Task.Run($null) }
       catch { $null = $Task.RunEx($null, 0, 0, $null) }
     }
@@ -756,7 +908,8 @@ function Watch-SystemRun {
   # 267009 = currently running, 267011 = has not run yet
   if ($Status.LastTaskResult -in 267009, 267011) {
     if ($Status.LastTaskResult -eq 267011 -and $Elapsed.TotalSeconds -gt 30) {
-      Complete-SystemRun -ErrorMessage "The Scheduled Task did not start within 30 seconds."
+      $Hint = if ($Run.Mode -eq 'CurrentUser') { " An interactive task only starts for an account that is signed in to Windows. If Run As SYSTEM was elevated with a different account, that account isn't signed in." } else { '' }
+      Complete-SystemRun -ErrorMessage "The Scheduled Task did not start within 30 seconds.$Hint"
     }
     return
   }
@@ -764,12 +917,87 @@ function Watch-SystemRun {
   Complete-SystemRun -ExitCode $Status.LastTaskResult
 }
 
+function Get-RunProcessId {
+  # Task Scheduler and PsExec don't hand back the installer's PID, so find it by the installer path in
+  # its command line and its start time. Only the top of each matching tree is returned, since stopping
+  # that ends its children too. The Windows Installer service (msiexec /V) never has the path in its
+  # command line, so it's never matched.
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Run
+  )
+
+  $Since = $Run.Started.AddSeconds(-5)
+  $InstallerPath = $Run.Spec.InstallerPath
+  # The local PsExec client also has the path in its command line, and is stopped separately
+  $PsExecClientId = if ($Run.Process) { $Run.Process.Id } else { -1 }
+
+  $Found = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
+      $_.CommandLine -and
+      $_.CommandLine.IndexOf($InstallerPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+      $_.CreationDate -ge $Since -and
+      $_.ProcessId -ne $PID -and
+      $_.ProcessId -ne $PsExecClientId
+    })
+
+  $FoundIds = @($Found | ForEach-Object { $_.ProcessId })
+  return @($Found | Where-Object { $FoundIds -notcontains $_.ParentProcessId } | ForEach-Object { $_.ProcessId })
+}
+
+function Stop-SystemRun {
+  $Run = $Script:CurrentRun
+  if (-not $Run) { return }
+
+  # An MSI install runs in the Windows Installer service, not the msiexec.exe process this run started.
+  # Ending that process doesn't stop the service, and stopping the service would affect every install
+  # on the device, so for MSI and MSP this only stops waiting.
+  $IsWindowsInstaller = $Run.Spec.Type -in 'MSI', 'MSP'
+  $Answer = [System.Windows.MessageBox]::Show("Stop the running process?`n`nThe process and anything it started are ended immediately, so the software may be left partly installed.`n`nMSI installs (including an MSI started by another process) can't be stopped this way. Windows Installer keeps running them in the background until they finish, and the log keeps being written. Run As SYSTEM only stops waiting, so the exit code won't be recorded. Uninstall afterwards if you need to undo it.", "Run As SYSTEM - Stop", "YesNo", "Warning")
+  if ($Answer -ne 'Yes') { return }
+  # The timer keeps running while the prompt is open, so the run may have finished in the meantime
+  if ($Script:CurrentRun -ne $Run) { return }
+
+  Write-Host "Stopping run: [$($Run.CommandRun)]"
+  $Note = $null
+  try {
+    $ProcessIds = @(Get-RunProcessId -Run $Run)
+  }
+  catch {
+    $ProcessIds = @()
+    Write-Host "Unable to list processes: $($_.Exception.Message)"
+  }
+
+  foreach ($ProcessId in $ProcessIds) {
+    # /T ends the whole tree: bootstrappers and PSADT often start child installers
+    Write-Host "Stopping process tree: [$ProcessId]"
+    & "$env:SystemRoot\System32\taskkill.exe" /PID $ProcessId /T /F 2>&1 | ForEach-Object { Write-Host "  $_" }
+  }
+  if ($ProcessIds.Count -eq 0 -and -not $IsWindowsInstaller) {
+    $Note = "The process couldn't be found, so only the $(if ($Run.TaskName) { 'Scheduled Task' } else { 'PsExec client' }) was stopped. Check Task Manager for anything still running."
+    Write-Host $Note
+  }
+
+  # Also stop what launched it, in case the process search missed something
+  if ($Run.TaskName) {
+    try { (Connect-TaskService).GetFolder('\').GetTask($Run.TaskName).Stop(0) } catch {}
+  }
+  if ($Run.Process -and -not $Run.Process.HasExited) {
+    try { $Run.Process.Kill() } catch {}
+  }
+
+  Complete-SystemRun -Stopped -WindowsInstaller:$IsWindowsInstaller -ErrorMessage $Note
+}
+
 function Complete-SystemRun {
   param (
     [Parameter(Mandatory = $false)]
     [Nullable[int]]$ExitCode,
     [Parameter(Mandatory = $false)]
-    [string]$ErrorMessage
+    [string]$ErrorMessage,
+    [Parameter(Mandatory = $false)]
+    [switch]$Stopped,
+    [Parameter(Mandatory = $false)]
+    [switch]$WindowsInstaller
   )
 
   $Script:RunTimer.Stop()
@@ -779,14 +1007,27 @@ function Complete-SystemRun {
   if ($Run.TaskName) { Remove-SystemTask -TaskName $Run.TaskName }
 
   $Duration = (Get-Date) - $Run.Started
-  $ModeText = if ($Run.Mode -eq 'PsExec') { 'Interactive (PsExec)' } else { 'Session 0' }
+  $ModeText = Get-ModeText -Mode $Run.Mode
   $Details = "$ModeText  |  Started $($Run.Started.ToString('T'))  |  Duration $($Duration.ToString('hh\:mm\:ss'))"
 
-  if ($null -ne $ExitCode) {
+  if ($Stopped) {
+    $Meaning = if ($WindowsInstaller) {
+      'Stopped waiting - Windows Installer is still running the install in the background. Check the log for the result.'
+    }
+    elseif ($ErrorMessage) {
+      "Stopped - $ErrorMessage"
+    }
+    else {
+      'Stopped - the process and anything it started were ended'
+    }
+    $Category = 'Stopped'
+    Set-ResultDisplay -ExitCodeText 'Stopped' -Meaning $Meaning -Details $Details -Category $Category
+    Write-Host "Run stopped: $Meaning"
+  }
+  elseif ($null -ne $ExitCode) {
     $Info = Get-ExitCodeInfo -ExitCode $ExitCode
-    $CodeText = if ($ExitCode -lt 0 -or $ExitCode -gt 65535) { "$ExitCode ($($Info.Hex))" } else { "$ExitCode" }
-    Set-ResultDisplay -ExitCodeText $CodeText -Meaning $Info.Meaning -Details $Details -Category $Info.Category
-    Write-Host "Exit Code: [$ExitCode] $($Info.Meaning)"
+    Set-ResultDisplay -ExitCodeText "$ExitCode" -HexText $Info.Hex -Meaning $Info.Meaning -Details $Details -Category $Info.Category
+    Write-Host "Exit Code: [$ExitCode] [$($Info.Hex)] $($Info.Meaning)"
     $Meaning = $Info.Meaning
     $Category = $Info.Category
   }
@@ -808,7 +1049,6 @@ function Complete-SystemRun {
       FilePath    = $Run.State.FilePath
       MsiAction   = $Run.State.MsiAction
       MsiUI       = $Run.State.MsiUI
-      NoRestart   = $Run.State.NoRestart
       LogEnabled  = $Run.State.LogEnabled
       LogPath     = $Run.State.LogPath
       Arguments   = $Run.State.Arguments
@@ -825,17 +1065,75 @@ function Complete-SystemRun {
 }
 
 #### History ####
+function Protect-HistoryValue {
+  # Arguments can hold passwords and license keys. DPAPI (CurrentUser scope) means only this
+  # Windows account on this device can decrypt them, so a copied History.json is unreadable.
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Value
+  )
+
+  if ([string]::IsNullOrEmpty($Value)) { return '' }
+  return ConvertTo-SecureString -String $Value -AsPlainText -Force | ConvertFrom-SecureString
+}
+
+function Unprotect-HistoryValue {
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Value
+  )
+
+  if ([string]::IsNullOrEmpty($Value)) { return '' }
+  $Secure = ConvertTo-SecureString -String $Value -ErrorAction Stop
+  return (New-Object System.Net.NetworkCredential('', $Secure)).Password
+}
+
 function Get-History {
   if (-not (Test-Path -LiteralPath $Script:HistoryPath)) { return @() }
   try {
     $Data = Get-Content -LiteralPath $Script:HistoryPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     # Piping unrolls the array (Windows PowerShell 5.1 returns a JSON array as a single object)
-    return @($Data | ForEach-Object { $_ })
+    $Entries = @($Data | ForEach-Object { $_ })
   }
   catch {
     Write-Host "Unable to read history: $($_.Exception.Message)"
     return @()
   }
+
+  $HasPlainText = $false
+  foreach ($Entry in $Entries) {
+    if (-not $Entry.PSObject.Properties['ArgumentsProtected']) {
+      # Saved by a version that stored arguments as plain text
+      $HasPlainText = $true
+      continue
+    }
+
+    try {
+      $Arguments = Unprotect-HistoryValue -Value $Entry.ArgumentsProtected
+      $CommandLine = Unprotect-HistoryValue -Value $Entry.CommandLineProtected
+      $Entry.PSObject.Properties.Remove('ArgumentsProtected')
+      $Entry.PSObject.Properties.Remove('CommandLineProtected')
+      $Unreadable = $false
+    }
+    catch {
+      # Encrypted by another Windows account or device, or the account's password was reset.
+      # Keep the encrypted values so saving the history doesn't destroy them.
+      $Arguments = ''
+      $CommandLine = ''
+      $Unreadable = $true
+    }
+    $Entry | Add-Member -NotePropertyName 'Arguments' -NotePropertyValue $Arguments -Force
+    $Entry | Add-Member -NotePropertyName 'CommandLine' -NotePropertyValue $CommandLine -Force
+    $Entry | Add-Member -NotePropertyName 'ArgumentsUnreadable' -NotePropertyValue $Unreadable -Force
+  }
+
+  # Re-save straight away so plain-text arguments don't stay on disk until the next run
+  if ($HasPlainText) {
+    Write-Host "Encrypting the arguments saved in history: [$Script:HistoryPath]"
+    Save-History -Entries $Entries
+  }
+
+  return $Entries
 }
 
 function Save-History {
@@ -848,7 +1146,16 @@ function Save-History {
     if (-not (Test-Path -LiteralPath $Script:AppDataPath)) {
       New-Item -ItemType Directory -Path $Script:AppDataPath -Force | Out-Null
     }
-    ConvertTo-Json -InputObject @($Entries) -Depth 3 | Set-Content -LiteralPath $Script:HistoryPath -Encoding UTF8 -ErrorAction Stop
+
+    $Output = @(foreach ($Entry in $Entries) {
+      $Copy = $Entry | Select-Object -Property * -ExcludeProperty 'Arguments', 'CommandLine', 'ArgumentsUnreadable'
+      if (-not $Entry.ArgumentsUnreadable) {
+        $Copy | Add-Member -NotePropertyName 'ArgumentsProtected' -NotePropertyValue (Protect-HistoryValue -Value $Entry.Arguments) -Force
+        $Copy | Add-Member -NotePropertyName 'CommandLineProtected' -NotePropertyValue (Protect-HistoryValue -Value $Entry.CommandLine) -Force
+      }
+      $Copy
+    })
+    ConvertTo-Json -InputObject $Output -Depth 3 | Set-Content -LiteralPath $Script:HistoryPath -Encoding UTF8 -ErrorAction Stop
   }
   catch {
     Write-Host "Unable to save history: $($_.Exception.Message)"
@@ -874,13 +1181,15 @@ function Update-HistoryList {
     $CodeBrush = switch ($Entry.Category) {
       'Success' { $formRunAsSystem.FindResource('Success') }
       'Reboot' { $formRunAsSystem.FindResource('Accent') }
+      { $_ -in 'Stopped', 'Cancelled', 'StoppedWaiting' } { $formRunAsSystem.FindResource('TextMuted') }
       default { $formRunAsSystem.FindResource('Danger') }
     }
 
     # Line 1: File name and exit code
     $Line1 = New-Object System.Windows.Controls.DockPanel
     $Code = New-Object System.Windows.Controls.TextBlock
-    $Code.Text = if ($null -ne $Entry.ExitCode) { [string]$Entry.ExitCode } else { 'Error' }
+    # 'Cancelled' and 'StoppedWaiting' were written by pre-release builds before they became 'Stopped'
+    $Code.Text = if ($Entry.Category -in 'Stopped', 'Cancelled', 'StoppedWaiting') { 'Stopped' } elseif ($null -ne $Entry.ExitCode) { [string]$Entry.ExitCode } else { 'Error' }
     $Code.Foreground = $CodeBrush
     $Code.FontWeight = 'SemiBold'
     $Code.Margin = '8,0,0,0'
@@ -894,21 +1203,74 @@ function Update-HistoryList {
 
     # Line 2: When and how
     $Line2 = New-Object System.Windows.Controls.TextBlock
-    $ModeText = if ($Entry.Mode -eq 'PsExec') { 'PsExec' } else { 'Session 0' }
+    $ModeText = Get-ModeText -Mode $Entry.Mode -Short
     $ActionText = if ($Entry.MsiAction -and (Get-InstallerType -Path $Entry.FilePath) -eq 'MSI') { "$($Entry.MsiAction)  |  " } else { '' }
     $Line2.Text = "$($Entry.Timestamp)  |  $ActionText$ModeText"
     $Line2.FontSize = 11
     $Line2.Foreground = $formRunAsSystem.FindResource('TextMuted')
     $Line2.TextTrimming = 'CharacterEllipsis'
+    if ($Entry.ArgumentsUnreadable) {
+      # Warning icon (Segoe MDL2 Assets) so the entry stands out before it's loaded
+      $Icon = New-Object System.Windows.Documents.Run ([string][char]0xE7BA)
+      $Icon.FontFamily = 'Segoe MDL2 Assets'
+      $Icon.Foreground = $formRunAsSystem.FindResource('Danger')
+      $Line2.Inlines.Add((New-Object System.Windows.Documents.Run '  |  '))
+      $Line2.Inlines.Add($Icon)
+    }
 
     $Panel = New-Object System.Windows.Controls.StackPanel
     $Panel.Children.Add($Line1) | Out-Null
     $Panel.Children.Add($Line2) | Out-Null
 
+    # Line 3: Arguments, so runs of the same installer with different arguments can be told apart
+    if ($Entry.Arguments) {
+      $Line3 = New-Object System.Windows.Controls.TextBlock
+      $Line3.Text = $Entry.Arguments
+      $Line3.FontFamily = 'Consolas'
+      $Line3.FontSize = 11
+      $Line3.Foreground = $formRunAsSystem.FindResource('TextMuted')
+      $Line3.TextTrimming = 'CharacterEllipsis'
+      $Line3.Margin = '0,2,0,0'
+      $Panel.Children.Add($Line3) | Out-Null
+    }
+
+    # Load and Copy buttons beside the exit code, only while the mouse is over the entry.
+    # Collapsed otherwise, so the file name gets the full width.
+    $Actions = New-Object System.Windows.Controls.StackPanel
+    $Actions.Orientation = 'Horizontal'
+    [System.Windows.Controls.DockPanel]::SetDock($Actions, 'Right')
+    $HoverBinding = New-Object System.Windows.Data.Binding 'IsMouseOver'
+    $HoverBinding.RelativeSource = New-Object System.Windows.Data.RelativeSource ([System.Windows.Data.RelativeSourceMode]::FindAncestor, [System.Windows.Controls.ListBoxItem], 1)
+    $HoverBinding.Converter = New-Object System.Windows.Controls.BooleanToVisibilityConverter
+    $Actions.SetBinding([System.Windows.UIElement]::VisibilityProperty, $HoverBinding) | Out-Null
+
+    $LoadButton = New-Object System.Windows.Controls.Button
+    $LoadButton.Style = $formRunAsSystem.FindResource('SmallIconButton')
+    # Segoe MDL2 Assets: Upload (load into the form)
+    $LoadButton.Content = [string][char]0xE898
+    $LoadButton.ToolTip = 'Load this run into the form'
+    $LoadButton.Tag = $Entry
+    $LoadButton.Add_Click({ Import-HistoryEntry -Entry $this.Tag })
+    $Actions.Children.Add($LoadButton) | Out-Null
+
+    # Nothing to copy when the command line couldn't be decrypted
+    if (-not $Entry.ArgumentsUnreadable) {
+      $CopyButton = New-Object System.Windows.Controls.Button
+      $CopyButton.Style = $formRunAsSystem.FindResource('SmallIconButton')
+      $CopyButton.Content = [string][char]0xE8C8
+      $CopyButton.ToolTip = 'Copy the command line'
+      $CopyButton.Tag = $Entry
+      $CopyButton.Add_Click({ Copy-HistoryEntry -Entry $this.Tag })
+      $Actions.Children.Add($CopyButton) | Out-Null
+    }
+
+    # Docked children must come before the name, which fills the rest of the line
+    $Line1.Children.Insert(1, $Actions)
+
     $Item = New-Object System.Windows.Controls.ListBoxItem
     $Item.Content = $Panel
     $Item.Tag = $Entry
-    $Item.ToolTip = "$($Entry.CommandLine)`n`n$($Entry.Meaning)"
+    $Item.ToolTip = if ($Entry.ArgumentsUnreadable) { "The arguments of this run were saved by another Windows account or device and can't be decrypted.`n`n$($Entry.Meaning)" } else { "$($Entry.CommandLine)`n`n$($Entry.Meaning)" }
     $lsbox_History.Items.Add($Item) | Out-Null
   }
 
@@ -916,10 +1278,43 @@ function Update-HistoryList {
   Update-HistoryButtons
 }
 
+function Import-HistoryEntry {
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Entry
+  )
+
+  if ($Script:CurrentRun) {
+    Set-StatusBar -Warning -Text "A run can't be loaded while an installer is running"
+    return
+  }
+
+  Set-FormState -State $Entry
+  if ($Entry.ArgumentsUnreadable) {
+    Set-StatusBar -Warning -Text "Loaded run from $($Entry.Timestamp) WITHOUT its arguments - they were saved on another account or device and can't be decrypted here. Re-enter them before running."
+  }
+  else {
+    Set-StatusBar -Text "Loaded run from $($Entry.Timestamp)"
+  }
+}
+
+function Copy-HistoryEntry {
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Entry
+  )
+
+  if (-not $Entry.CommandLine) { return }
+  [System.Windows.Clipboard]::SetText($Entry.CommandLine)
+  Write-Host "Copied to Clipboard: [$($Entry.CommandLine)]"
+  Set-StatusBar -Text "Command line copied to the clipboard"
+}
+
 function Update-HistoryButtons {
   $HasSelection = $null -ne $lsbox_History.SelectedItem
   $btn_HistoryLoad.IsEnabled = $HasSelection -and ($null -eq $Script:CurrentRun)
-  $btn_HistoryCopy.IsEnabled = $HasSelection
+  # There's nothing to copy when the command line couldn't be decrypted
+  $btn_HistoryCopy.IsEnabled = $HasSelection -and -not $lsbox_History.SelectedItem.Tag.ArgumentsUnreadable
 }
 
 #### Elevated Drag and Drop ####
@@ -1142,7 +1537,7 @@ function Install-RightClickMenu {
     Write-Host "Registry Modified:  [$KeyPath]"
   }
   Write-Host "Installation Complete"
-  $txtblk_StatusBar.Text = "Right-click menu installed for: $($Script:SupportedExtensions -join ' ')"
+  Set-StatusBar -Text "Right-click menu installed for: $($Script:SupportedExtensions -join ' ')"
 }
 
 function Uninstall-RightClickMenu {
@@ -1160,7 +1555,7 @@ function Uninstall-RightClickMenu {
   Remove-Item -LiteralPath $Script:RightClickMenuFolderPath -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host "Deleted Folder:   [$($Script:RightClickMenuFolderPath)]"
   Write-Host "Uninstallation Complete"
-  $txtblk_StatusBar.Text = "Right-click menu uninstalled"
+  Set-StatusBar -Text "Right-click menu uninstalled"
 }
 #endregion Functions
 
@@ -1198,6 +1593,10 @@ Add-Type -AssemblyName WindowsBase
 
   <Window.Resources>
     <!-- Color tokens (michaeltheadmin.com palette) -->
+    <!-- Window: the darkest stone (#1C1917) with a little of the site's darkest orange (#7C2D12),
+         so the window behind the cards has its own shade instead of matching a card or an input -->
+    <SolidColorBrush x:Key="Window"
+        Color="#231915"/>
     <SolidColorBrush x:Key="Bg"
         Color="#292524"/>
     <SolidColorBrush x:Key="Surface"
@@ -1429,7 +1828,7 @@ Add-Type -AssemblyName WindowsBase
                 CornerRadius="6">
               <ScrollViewer x:Name="PART_ContentHost"
                   Margin="{TemplateBinding Padding}"
-                  VerticalAlignment="Center"/>
+                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver"
@@ -1597,6 +1996,9 @@ Add-Type -AssemblyName WindowsBase
     <Style TargetType="ComboBox">
       <Setter Property="Foreground"
           Value="{StaticResource Text}"/>
+      <!-- Bound through the template so a card can make it darker than its own Surface background -->
+      <Setter Property="Background"
+          Value="{StaticResource Surface}"/>
       <Setter Property="Margin"
           Value="2.5"/>
       <Setter Property="Cursor"
@@ -1607,11 +2009,12 @@ Add-Type -AssemblyName WindowsBase
             <Grid>
               <ToggleButton Focusable="False"
                   ClickMode="Press"
+                  Background="{TemplateBinding Background}"
                   IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                 <ToggleButton.Template>
                   <ControlTemplate TargetType="ToggleButton">
                     <Border x:Name="Bd"
-                        Background="{StaticResource Surface}"
+                        Background="{TemplateBinding Background}"
                         BorderBrush="{StaticResource Border}"
                         BorderThickness="1"
                         CornerRadius="6">
@@ -1792,6 +2195,25 @@ Add-Type -AssemblyName WindowsBase
       </Setter>
     </Style>
 
+    <!-- Section card. Four layers, each its own shade: the tinted Window behind, the card (Bg) slightly
+         raised, inputs (Surface) darker inside it, and buttons (Surface2) lighter -->
+
+    <Style x:Key="Card"
+        TargetType="Border">
+      <Setter Property="Background"
+          Value="{StaticResource Bg}"/>
+      <Setter Property="BorderBrush"
+          Value="{StaticResource BorderMuted}"/>
+      <Setter Property="BorderThickness"
+          Value="1"/>
+      <Setter Property="CornerRadius"
+          Value="8"/>
+      <Setter Property="Margin"
+          Value="2.5"/>
+      <Setter Property="Padding"
+          Value="10,6"/>
+    </Style>
+
     <!-- Muted section label -->
     <Style x:Key="SectionHeader"
         TargetType="TextBlock">
@@ -1805,6 +2227,16 @@ Add-Type -AssemblyName WindowsBase
           Value="Center"/>
       <Setter Property="Margin"
           Value="5,0,0,0"/>
+    </Style>
+
+    <!-- Section header inside the top of a card -->
+    <Style x:Key="CardHeader"
+        TargetType="TextBlock"
+        BasedOn="{StaticResource SectionHeader}">
+      <Setter Property="Margin"
+          Value="0,0,0,4"/>
+      <Setter Property="HorizontalAlignment"
+          Value="Left"/>
     </Style>
 
     <!-- Thin scrollbar -->
@@ -1899,6 +2331,67 @@ Add-Type -AssemblyName WindowsBase
                 <Setter TargetName="Bd"
                     Property="BorderBrush"
                     Value="{StaticResource Accent}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Small icon buttons: the hover Load/Copy buttons on history entries and Reset in the file box -->
+    <Style x:Key="SmallIconButton"
+        TargetType="Button">
+      <Setter Property="Foreground"
+          Value="{StaticResource TextMuted}"/>
+      <Setter Property="Background"
+          Value="Transparent"/>
+      <Setter Property="BorderBrush"
+          Value="Transparent"/>
+      <Setter Property="FontFamily"
+          Value="Segoe MDL2 Assets"/>
+      <Setter Property="FontSize"
+          Value="12"/>
+      <Setter Property="Width"
+          Value="26"/>
+      <Setter Property="Height"
+          Value="22"/>
+      <!-- Negative vertical margin keeps the line the same height when the buttons appear -->
+      <Setter Property="Margin"
+          Value="2,-3,0,-3"/>
+      <Setter Property="Cursor"
+          Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="4">
+              <ContentPresenter HorizontalAlignment="Center"
+                  VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver"
+                  Value="True">
+                <Setter TargetName="Bd"
+                    Property="BorderBrush"
+                    Value="{StaticResource Accent}"/>
+                <Setter Property="Foreground"
+                    Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsPressed"
+                  Value="True">
+                <Setter TargetName="Bd"
+                    Property="Background"
+                    Value="{StaticResource Accent}"/>
+                <Setter Property="Foreground"
+                    Value="{StaticResource AccentText}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled"
+                  Value="False">
+                <Setter Property="Opacity"
+                    Value="0.4"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -2010,7 +2503,7 @@ Add-Type -AssemblyName WindowsBase
     </Style>
   </Window.Resources>
 
-  <Border Background="{StaticResource Bg}"
+  <Border Background="{StaticResource Window}"
       CornerRadius="12"
       BorderBrush="{StaticResource BorderMuted}"
       BorderThickness="1"
@@ -2109,240 +2602,286 @@ Add-Type -AssemblyName WindowsBase
 
         <!-- Left: Installer, options and result -->
         <Grid Grid.Column="0">
+          <!-- Each section is a card with its header inside -->
           <Grid.RowDefinitions>
-            <RowDefinition Height="26"/>
-            <RowDefinition Height="40"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="26"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="40"/>
-            <RowDefinition Height="26"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="26"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="56"/>
-            <RowDefinition Height="26"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="56"/>
+            <RowDefinition Height="136"/>
           </Grid.RowDefinitions>
 
           <!-- INSTALLER -->
-          <TextBlock Grid.Row="0"
-              Style="{StaticResource SectionHeader}"
-              Text="INSTALLER"/>
-          <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="100"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Content="File"/>
-            <TextBox Grid.Column="1"
-                Name="txt_FilePath"
-                ToolTip="Path to the installer. Drag and drop a file anywhere on this window, paste a path, or Browse."/>
-            <Button Grid.Column="2"
-                Name="btn_Browse"
-                Content="Browse"/>
-          </Grid>
-          <TextBlock Grid.Row="2"
-              Name="txtblk_FileInfo"
-              Margin="108,2,8,6"
-              FontSize="12"
-              TextWrapping="Wrap"
-              Foreground="{StaticResource TextMuted}"/>
-
-          <!-- OPTIONS -->
-          <TextBlock Grid.Row="3"
-              Style="{StaticResource SectionHeader}"
-              Text="OPTIONS"/>
-          <Grid Grid.Row="4"
-              Name="panel_MsiOptions"
-              Height="40"
-              Visibility="Collapsed">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="200"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Content="Action"/>
-            <ComboBox Grid.Column="1"
-                Name="cmb_MsiAction">
-              <ComboBoxItem Content="Install (/i)"
-                  Tag="/i"
-                  IsSelected="True"/>
-              <ComboBoxItem Content="Uninstall (/x)"
-                  Tag="/x"/>
-              <ComboBoxItem Content="Repair (/fvomus)"
-                  Tag="/fvomus"/>
-            </ComboBox>
-            <Label Grid.Column="2"
-                Content="UI"/>
-            <ComboBox Grid.Column="3"
-                Name="cmb_MsiUI">
-              <ComboBoxItem Content="Silent (/qn)"
-                  Tag="/qn"
-                  IsSelected="True"/>
-              <ComboBoxItem Content="Basic UI (/qb)"
-                  Tag="/qb"/>
-              <ComboBoxItem Content="Basic UI, no cancel (/qb!)"
-                  Tag="/qb!"/>
-              <ComboBoxItem Content="Passive (/passive)"
-                  Tag="/passive"/>
-              <ComboBoxItem Content="Full UI"
-                  Tag=""/>
-            </ComboBox>
-            <CheckBox Grid.Column="4"
-                Name="chk_NoRestart"
-                Content="/norestart"
-                IsChecked="True"/>
-          </Grid>
-          <Grid Grid.Row="5"
-              Name="panel_MsiLog"
-              Height="40"
-              Visibility="Collapsed">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Content="Log"/>
-            <CheckBox Grid.Column="1"
-                Name="chk_Log"
-                Content="/l*v"
-                IsChecked="True"/>
-            <TextBox Grid.Column="2"
-                Name="txt_LogPath"
-                ToolTip="Verbose log path. Defaults to the installer name with .log added, in the installer's folder."/>
-          </Grid>
-          <Grid Grid.Row="6">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Name="lbl_Arguments"
-                Content="Arguments"/>
-            <TextBox Grid.Column="1"
-                Name="txt_Arguments"
-                ToolTip="Arguments for the installer. For MSI files, add properties here (e.g. ALLUSERS=1 TRANSFORMS=&quot;app.mst&quot;)."/>
-          </Grid>
+          <Border Grid.Row="0"
+              Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource CardHeader}"
+                  Text="INSTALLER"/>
+              <Grid Height="40">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="100"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Content="File"/>
+                <TextBox Grid.Column="1"
+                    Name="txt_FilePath"
+                    Padding="8,0,36,0"
+                    ToolTip="Path to the installer. Drag and drop a file anywhere on this window, paste a path, or Browse."/>
+                <!-- Sits inside the right end of the file box; the box's right padding keeps the path from running under it -->
+                <Button Grid.Column="1"
+                    Name="btn_Reset"
+                    Style="{StaticResource SmallIconButton}"
+                    HorizontalAlignment="Right"
+                    Margin="0,0,8,0"
+                    Content="&#xE894;"
+                    ToolTip="Reset - clear the file, options and result (Ctrl+R)"/>
+                <Button Grid.Column="2"
+                    Name="btn_Browse"
+                    ToolTip="Browse for an installer (Ctrl+O)"
+                    Content="Browse"/>
+              </Grid>
+              <TextBlock Name="txtblk_FileInfo"
+                  Margin="108,0,8,4"
+                  FontSize="12"
+                  TextWrapping="Wrap"
+                  Foreground="{StaticResource TextMuted}"/>
+              <!-- Options share the installer card: a thin divider instead of a separate card saves height for the command line -->
+              <Border Height="1"
+                  Margin="6,2,6,4"
+                  Background="{StaticResource Border}"/>
+              <Grid Name="panel_MsiOptions"
+                  Height="40"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="200"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Content="Action"/>
+                <ComboBox Grid.Column="1"
+                    Name="cmb_MsiAction">
+                  <ComboBoxItem Content="Install (/i)"
+                      Tag="/i"
+                      IsSelected="True"/>
+                  <ComboBoxItem Content="Uninstall (/x)"
+                      Tag="/x"/>
+                  <ComboBoxItem Content="Repair (/fvomus)"
+                      Tag="/fvomus"/>
+                </ComboBox>
+                <Label Grid.Column="2"
+                    Content="UI"/>
+                <ComboBox Grid.Column="3"
+                    Name="cmb_MsiUI">
+                  <ComboBoxItem Content="Silent (/qn)"
+                      Tag="/qn"
+                      IsSelected="True"/>
+                  <ComboBoxItem Content="Basic UI (/qb)"
+                      Tag="/qb"/>
+                  <ComboBoxItem Content="Basic UI, no cancel (/qb!)"
+                      Tag="/qb!"/>
+                  <ComboBoxItem Content="Passive (/passive)"
+                      Tag="/passive"/>
+                  <ComboBoxItem Content="Full UI"
+                      Tag=""/>
+                </ComboBox>
+              </Grid>
+              <Grid Name="panel_MsiLog"
+                  Height="40"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Content="Log"/>
+                <CheckBox Grid.Column="1"
+                    Name="chk_Log"
+                    Content="/l*v"
+                    IsChecked="True"/>
+                <TextBox Grid.Column="2"
+                    Name="txt_LogPath"
+                    ToolTip="Verbose log path. Defaults to the installer name plus the action, in the installer's folder (e.g. Setup.msi.Install.log)."/>
+              </Grid>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Name="lbl_Arguments"
+                    Padding="0,0,8,0"
+                    Content="ArgumentList"/>
+                <!-- Wraps and grows to about three lines for long property lists, then scrolls. Enter still doesn't add a line break -->
+                <TextBox Grid.Column="1"
+                    Name="txt_Arguments"
+                    TextWrapping="Wrap"
+                    AcceptsReturn="False"
+                    MinHeight="35"
+                    MaxHeight="76"
+                    Padding="8,3"
+                    VerticalScrollBarVisibility="Auto"
+                    ToolTip="Arguments for the installer. For MSI files, add properties here (e.g. ALLUSERS=1 TRANSFORMS=&quot;app.mst&quot;)."/>
+              </Grid>
+            </StackPanel>
+          </Border>
 
           <!-- RUN AS -->
-          <TextBlock Grid.Row="7"
-              Style="{StaticResource SectionHeader}"
-              Text="RUN AS NT AUTHORITY\SYSTEM"/>
-          <StackPanel Grid.Row="8"
-              Margin="100,0,0,4">
-            <RadioButton Name="rad_Session0"
-                GroupName="RunMode"
-                IsChecked="True">
-              <TextBlock>
-                <Run Text="Session 0"
-                    FontWeight="SemiBold"/>
-                <Run Text=" - hidden, no desktop. The same as ConfigMgr and Intune."
-                    Foreground="{StaticResource TextMuted}"/>
-              </TextBlock>
-            </RadioButton>
-            <RadioButton Name="rad_PsExec"
-                GroupName="RunMode">
-              <TextBlock>
-                <Run Text="Interactive (PsExec)"
-                    FontWeight="SemiBold"/>
-                <Run Text=" - installer UI is visible on your desktop."
-                    Foreground="{StaticResource TextMuted}"/>
-              </TextBlock>
-            </RadioButton>
-          </StackPanel>
+          <Border Grid.Row="1"
+              Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource CardHeader}"
+                  Text="RUN AS"/>
+              <StackPanel Margin="96,0,0,2">
+                <RadioButton Name="rad_Session0"
+                    GroupName="RunMode"
+                    IsChecked="True">
+                  <TextBlock>
+                    <Run Text="Session 0"
+                        FontWeight="SemiBold"/>
+                    <Run Text=" - SYSTEM, hidden, no desktop. The same as ConfigMgr and Intune."
+                        Foreground="{StaticResource TextMuted}"/>
+                  </TextBlock>
+                </RadioButton>
+                <RadioButton Name="rad_PsExec"
+                    GroupName="RunMode">
+                  <TextBlock>
+                    <Run Text="Interactive (PsExec)"
+                        FontWeight="SemiBold"/>
+                    <Run Text=" - SYSTEM, installer UI is visible on your desktop."
+                        Foreground="{StaticResource TextMuted}"/>
+                  </TextBlock>
+                </RadioButton>
+                <RadioButton Name="rad_CurrentUser"
+                    GroupName="RunMode">
+                  <TextBlock>
+                    <Run Text="Current user"
+                        FontWeight="SemiBold"/>
+                    <!-- Filled in on load with the account and its elevation -->
+                    <Run Name="txtblk_CurrentUserDetail"
+                        Foreground="{StaticResource TextMuted}"/>
+                  </TextBlock>
+                </RadioButton>
+              </StackPanel>
+            </StackPanel>
+          </Border>
 
           <!-- COMMAND LINE -->
-          <TextBlock Grid.Row="9"
-              Style="{StaticResource SectionHeader}"
-              Text="COMMAND LINE"/>
-          <Grid Grid.Row="10">
+          <Border Grid.Row="2"
+              Style="{StaticResource Card}">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top"
+                  Style="{StaticResource CardHeader}"
+                  Text="COMMAND LINE"/>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="60"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0"
+                    Name="txt_CommandLine"
+                    IsReadOnly="True"
+                    TextWrapping="Wrap"
+                    MinHeight="56"
+                    Padding="8,6"
+                    VerticalContentAlignment="Top"
+                    VerticalScrollBarVisibility="Auto"
+                    FontFamily="Consolas"
+                    FontSize="13"/>
+                <Button Grid.Column="1"
+                    Name="btn_CommandLine_Copy"
+                    Style="{StaticResource CopyButton}"
+                    ToolTip="Copy the command line"
+                    Content="&#xE8C8;"/>
+              </Grid>
+            </DockPanel>
+          </Border>
+          <!-- Stop is a separate button rather than Run changing into Stop, so double-clicking Run can't stop the process -->
+          <Grid Grid.Row="3"
+              Margin="0,5.5,0,0">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="60"/>
+              <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBox Grid.Column="0"
-                Name="txt_CommandLine"
-                IsReadOnly="True"
-                TextWrapping="Wrap"
-                MinHeight="56"
-                Padding="8,6"
-                FontFamily="Consolas"
-                FontSize="13"/>
+            <Button Grid.Column="0"
+                Name="btn_Run"
+                Style="{StaticResource AccentButton}"
+                ToolTip="Ctrl+Enter or F5"
+                Content="Run as SYSTEM"/>
             <Button Grid.Column="1"
-                Name="btn_CommandLine_Copy"
-                Style="{StaticResource CopyButton}"
-                ToolTip="Copy the command line"
-                Content="&#xE8C8;"/>
+                Name="btn_Stop"
+                Width="140"
+                FontSize="16"
+                Foreground="{StaticResource Danger}"
+                BorderBrush="{StaticResource Danger}"
+                Visibility="Collapsed"
+                ToolTip="Stop the running process and anything it started. An MSI install keeps running in Windows Installer."
+                Content="Stop"/>
           </Grid>
-          <Button Grid.Row="11"
-              Name="btn_Run"
-              Style="{StaticResource AccentButton}"
-              Margin="2.5,8,2.5,2.5"
-              Content="Run as SYSTEM"/>
 
           <!-- RESULT -->
-          <TextBlock Grid.Row="12"
-              Style="{StaticResource SectionHeader}"
-              Text="RESULT"/>
-          <Border Grid.Row="13"
-              Margin="2.5"
-              CornerRadius="8"
-              BorderBrush="{StaticResource Border}"
-              BorderThickness="1"
-              Background="{StaticResource Surface}">
-            <Grid Margin="14,8">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"
-                    MinWidth="110"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="120"/>
-              </Grid.ColumnDefinitions>
-              <StackPanel Grid.Column="0"
-                  VerticalAlignment="Center">
-                <TextBlock Text="EXIT CODE"
-                    FontSize="10"
-                    FontWeight="SemiBold"
-                    Foreground="{StaticResource TextMuted}"/>
-                <TextBlock Name="txtblk_ExitCode"
-                    Text="--"
-                    FontSize="34"
-                    FontWeight="Bold"
-                    Foreground="{StaticResource Text}"/>
-              </StackPanel>
-              <StackPanel Grid.Column="1"
-                  VerticalAlignment="Center"
-                  Margin="16,0,8,0">
-                <TextBlock Name="txtblk_ExitMeaning"
-                    Text="Not run yet"
-                    FontWeight="SemiBold"
-                    TextWrapping="Wrap"
-                    Foreground="{StaticResource Text}"/>
-                <TextBlock Name="txtblk_RunDetails"
-                    FontSize="12"
-                    TextWrapping="Wrap"
-                    Margin="0,4,0,0"
-                    Foreground="{StaticResource TextMuted}"/>
-              </StackPanel>
-              <StackPanel Grid.Column="2"
-                  VerticalAlignment="Center">
-                <Button Name="btn_OpenLog"
-                    Content="Open Log"
-                    Height="34"
-                    IsEnabled="False"/>
-                <Button Name="btn_OpenFolder"
-                    Content="Open Folder"
-                    Height="34"
-                    IsEnabled="False"/>
-              </StackPanel>
-            </Grid>
+          <Border Grid.Row="4"
+              Style="{StaticResource Card}">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top"
+                  Style="{StaticResource CardHeader}"
+                  Text="RESULT"/>
+              <Grid Margin="10,0,10,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"
+                      MinWidth="110"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="120"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0"
+                    VerticalAlignment="Center">
+                  <TextBlock Text="EXIT CODE"
+                      FontSize="10"
+                      FontWeight="SemiBold"
+                      Foreground="{StaticResource TextMuted}"/>
+                  <TextBlock Name="txtblk_ExitCode"
+                      Text="--"
+                      FontSize="34"
+                      FontWeight="Bold"
+                      Foreground="{StaticResource Text}"/>
+                  <!-- Hex as well: EXE installers often document their codes in hex, and HRESULTs are easier to look up that way -->
+                  <TextBlock Name="txtblk_ExitCodeHex"
+                      FontFamily="Consolas"
+                      FontSize="12"
+                      Margin="0,-4,0,0"
+                      Foreground="{StaticResource TextMuted}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                    VerticalAlignment="Center"
+                    Margin="16,0,8,0">
+                  <TextBlock Name="txtblk_ExitMeaning"
+                      Text="Not run yet"
+                      FontWeight="SemiBold"
+                      TextWrapping="Wrap"
+                      Foreground="{StaticResource Text}"/>
+                  <TextBlock Name="txtblk_RunDetails"
+                      FontSize="12"
+                      TextWrapping="Wrap"
+                      Margin="0,4,0,0"
+                      Foreground="{StaticResource TextMuted}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2"
+                    VerticalAlignment="Center">
+                  <Button Name="btn_OpenLog"
+                      Content="Open Log"
+                      Height="34"
+                      IsEnabled="False"/>
+                  <Button Name="btn_OpenFolder"
+                      Content="Open Folder"
+                      Height="34"
+                      IsEnabled="False"/>
+                </StackPanel>
+              </Grid>
+            </DockPanel>
           </Border>
         </Grid>
 
@@ -2360,20 +2899,26 @@ Add-Type -AssemblyName WindowsBase
         <!-- Right: History -->
         <Grid Grid.Column="2">
           <Grid.RowDefinitions>
-            <RowDefinition Height="26"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="40"/>
           </Grid.RowDefinitions>
-          <TextBlock Grid.Row="0"
-              Style="{StaticResource SectionHeader}"
-              Text="HISTORY"/>
-          <ListBox Grid.Row="1"
-              Name="lsbox_History"/>
-          <UniformGrid Grid.Row="2"
+          <Border Grid.Row="0"
+              Style="{StaticResource Card}">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top"
+                  Style="{StaticResource CardHeader}"
+                  Text="HISTORY"/>
+              <!-- A dark panel like the inputs; the card is the frame, so the list drops its own border -->
+              <ListBox Name="lsbox_History"
+                  Margin="0"
+                  BorderThickness="0"/>
+            </DockPanel>
+          </Border>
+          <UniformGrid Grid.Row="1"
               Columns="3">
             <Button Name="btn_HistoryLoad"
                 Content="Load"
-                ToolTip="Load the selected run back into the form (or double-click it)"/>
+                ToolTip="Load the selected run back into the form (Ctrl+L, or double-click it)"/>
             <Button Name="btn_HistoryCopy"
                 Content="Copy"
                 ToolTip="Copy the command line of the selected run"/>
@@ -2396,6 +2941,9 @@ $readerformRunAsSystem = New-Object System.Xml.XmlNodeReader $XAMLformRunAsSyste
 
 # Create Variables for all the controls in the XAML form
 $XAMLformRunAsSystem.SelectNodes("//*[@Name]") | ForEach-Object { Set-Variable -Name ($_.Name) -Value $formRunAsSystem.FindName($_.Name) -Scope Script }
+
+# The status bar text the window opens with, so Reset can put it back
+$Script:DefaultStatusBarText = $txtblk_StatusBar.Text
 
 # Timer that watches a run in progress
 $Script:RunTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -2438,6 +2986,10 @@ $formRunAsSystem.Add_Loaded({
     $formRunAsSystem.Title = "Run As SYSTEM - Version $($Script:ScriptVersion)"
     $MenuItem_Version.Header = "Version $($Script:ScriptVersion)"
     $txtblk_TitleVersion.Text = " $($Script:ScriptVersion)"
+
+    # Show who Current user mode runs as, since it follows this script's account and elevation
+    $Elevation = if (Test-IsAdmin) { 'elevated' } else { 'not elevated' }
+    $txtblk_CurrentUserDetail.Text = " - $($Script:CurrentUserName) ($Elevation), installer UI is visible on your desktop."
 
     # Remove any tasks left behind by a previous session
     Clear-StaleSystemTasks
@@ -2489,15 +3041,18 @@ $formRunAsSystem.Add_Drop({
 $txt_FilePath.Add_TextChanged({ Update-FileSelection })
 $txt_Arguments.Add_TextChanged({ Update-CommandPreview })
 $txt_LogPath.Add_TextChanged({ Update-CommandPreview })
-$cmb_MsiAction.Add_SelectionChanged({ Update-CommandPreview })
+$cmb_MsiAction.Add_SelectionChanged({
+    Update-DefaultLogPath
+    Update-CommandPreview
+  })
 $cmb_MsiUI.Add_SelectionChanged({ Update-CommandPreview })
-$chk_NoRestart.Add_Click({ Update-CommandPreview })
 $chk_Log.Add_Click({
     $txt_LogPath.IsEnabled = [bool]$chk_Log.IsChecked
     Update-CommandPreview
   })
 $rad_Session0.Add_Checked({ Update-CommandPreview })
 $rad_PsExec.Add_Checked({ Update-CommandPreview })
+$rad_CurrentUser.Add_Checked({ Update-CommandPreview })
 
 $btn_Browse.Add_Click({
     $OpenFileDialog = New-Object Microsoft.Win32.OpenFileDialog
@@ -2516,12 +3071,38 @@ $btn_CommandLine_Copy.Add_Click({
     if ($txt_CommandLine.Text) {
       [System.Windows.Clipboard]::SetText($txt_CommandLine.Text)
       Write-Host "Copied to Clipboard: [$($txt_CommandLine.Text)]"
-      $txtblk_StatusBar.Text = "Command line copied to the clipboard"
+      Set-StatusBar -Text "Command line copied to the clipboard"
     }
   })
 
 #### Run ####
 $btn_Run.Add_Click({ Start-SystemRun })
+$btn_Reset.Add_Click({ Reset-Form })
+$btn_Stop.Add_Click({ Stop-SystemRun })
+
+#### Keyboard Shortcuts ####
+# Preview so the shortcuts work whichever control has focus. Each one only acts when its button is enabled,
+# so a shortcut can't start a second run or load history while an installer is running.
+$formRunAsSystem.Add_PreviewKeyDown({
+    $Ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+
+    if ($_.Key -eq 'F5' -or ($Ctrl -and $_.Key -eq 'Return')) {
+      if ($btn_Run.IsEnabled) { Start-SystemRun }
+      $_.Handled = $true
+    }
+    elseif ($Ctrl -and $_.Key -eq 'O') {
+      if ($btn_Browse.IsEnabled) { $btn_Browse.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) }
+      $_.Handled = $true
+    }
+    elseif ($Ctrl -and $_.Key -eq 'L') {
+      if ($btn_HistoryLoad.IsEnabled) { & $Script:HistoryLoadHandler }
+      $_.Handled = $true
+    }
+    elseif ($Ctrl -and $_.Key -eq 'R') {
+      if ($btn_Reset.IsEnabled) { Reset-Form }
+      $_.Handled = $true
+    }
+  })
 
 $btn_OpenLog.Add_Click({
     if ($Script:LastLogPath -and (Test-Path -LiteralPath $Script:LastLogPath)) {
@@ -2543,21 +3124,14 @@ $lsbox_History.Add_SelectionChanged({ Update-HistoryButtons })
 
 $Script:HistoryLoadHandler = {
   $Item = $lsbox_History.SelectedItem
-  if ($Item -and -not $Script:CurrentRun) {
-    Set-FormState -State $Item.Tag
-    $txtblk_StatusBar.Text = "Loaded run from $($Item.Tag.Timestamp)"
-  }
+  if ($Item) { Import-HistoryEntry -Entry $Item.Tag }
 }
 $btn_HistoryLoad.Add_Click($Script:HistoryLoadHandler)
 $lsbox_History.Add_MouseDoubleClick($Script:HistoryLoadHandler)
 
 $btn_HistoryCopy.Add_Click({
     $Item = $lsbox_History.SelectedItem
-    if ($Item -and $Item.Tag.CommandLine) {
-      [System.Windows.Clipboard]::SetText($Item.Tag.CommandLine)
-      Write-Host "Copied to Clipboard: [$($Item.Tag.CommandLine)]"
-      $txtblk_StatusBar.Text = "Command line copied to the clipboard"
-    }
+    if ($Item) { Copy-HistoryEntry -Entry $Item.Tag }
   })
 
 $btn_HistoryClear.Add_Click({
@@ -2608,11 +3182,11 @@ $MenuItem_CheckForUpdates.Add_Click({
       $result = & $Script:TestForUpdate $Script:ReleasesApiUrl $Script:UpdateCheckHeaders $Script:ScriptVersion
       Write-Host "Update available: $($result.UpdateAvailable) | Installed [$($Script:ScriptVersion)] | Latest [$($result.LatestVersion)]"
       Show-UpdateAvailable -Result $result
-      if (-not $result.UpdateAvailable) { $txtblk_StatusBar.Text = "You're running the latest version" }
+      if (-not $result.UpdateAvailable) { Set-StatusBar -Text "You're running the latest version" }
     }
     catch {
       Write-Host "Update check failed: $($_.Exception.Message)"
-      $txtblk_StatusBar.Text = "Update check failed: $($_.Exception.Message)"
+      Set-StatusBar -Warning -Text "Update check failed: $($_.Exception.Message)"
     }
   })
 

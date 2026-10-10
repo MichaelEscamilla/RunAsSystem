@@ -8,7 +8,7 @@ Run the script directly from GitHub:
 
 ### Invoke-Expression
 ```powershell
-iex (irm https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/RunAsSystem.ps1)
+iex (irm runassystem.michaeltheadmin.com)
 ```
 
 The app needs administrator rights. If it isn't started elevated, it relaunches itself and shows a UAC prompt.
@@ -31,10 +31,19 @@ The installer runs as SYSTEM **on your desktop**, so any installer UI is visible
 
 The tool looks for `PsExec64.exe` (or `PsExec.exe`) in the installer's folder first, then on the `PATH`. If it isn't found, the tool offers to download it from [live.sysinternals.com](https://live.sysinternals.com) into the installer's folder.
 
+### Current User
+The installer runs as **the account running RunAsSystem**, on your desktop, with the same elevation as RunAsSystem. Because the app always runs elevated, this normally means elevated. The option shows the account and its elevation, for example *ESKIMOLED\Eskim (elevated)*.
+
+It uses the same one-time Scheduled Task as Session 0 mode, registered for your account with an interactive token, so no password is needed. That means the exit code, cleanup and **Stop** work the same way.
+
+Things to know:
+- Intune and ConfigMgr run user-context installs **without** elevation, so this mode isn't an exact match for their user context. An installer that quietly needs admin rights will still succeed here.
+- If you elevated RunAsSystem with a **different** admin account than the one you're signed in with, the installer runs as that admin account, not as you. An interactive task may not start at all for an account that isn't signed in to Windows. If it doesn't start within 30 seconds, the tool says so.
+
 ## Supported File Types
 | Type | Runs as |
 | --- | --- |
-| `.msi` | `msiexec.exe /i` (or `/x`, `/fvomus`) `"file.msi"` + UI level, `/norestart`, `/l*v` log and properties |
+| `.msi` | `msiexec.exe /i` (or `/x`, `/fvomus`) `"file.msi"` + UI level, `/l*v` log and properties |
 | `.msp` | `msiexec.exe /p "file.msp"` + the same options |
 | `.exe` | The file itself, with your arguments |
 | `.ps1` | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "file.ps1"` + arguments |
@@ -46,11 +55,15 @@ The installer's own folder is always used as the working directory, the same as 
 ## MSI Options
 - **Action**: Install (`/i`), Uninstall (`/x`) or Repair (`/fvomus`).
 - **UI**: Silent (`/qn`), Basic (`/qb`), Basic with no cancel (`/qb!`), Passive (`/passive`) or Full UI.
-- **`/norestart`**: on by default.
-- **Log**: a verbose log (`/l*v`) is on by default. It's written next to the installer with `.log` added to the installer's file name (for example `Setup.msi` → `Setup.msi.log`). You can change the path.
-- **Properties**: anything else to pass to msiexec, such as `ALLUSERS=1 TRANSFORMS="app.mst"`.
+- **Log**: a verbose log (`/l*v`) is on by default. It's written next to the installer, named after the installer and the action: `Setup.msi.Install.log`, `Setup.msi.Uninstall.log`, `Setup.msi.Repair.log`, or `Update.msp.Patch.log` for a patch. Changing the action updates the name, unless you've typed your own path.
+- **ArgumentList**: anything else to pass to msiexec, such as `ALLUSERS=1 TRANSFORMS="app.mst"` or `/norestart`.
 
 The **Command Line** box shows exactly what will run, and you can copy it with the copy button.
+
+## Stopping a Run
+While a run is in progress, a **Stop** button appears next to Run. It works the same way for every file type and in both Session 0 and PsExec modes. It ends the running process and anything it started, and records the run as **Stopped** in history. Stopping a process partway through can leave the software partly installed.
+
+**MSI installs can't be stopped this way**, and neither can an MSI started by an EXE. The install runs in the Windows Installer service, not in the `msiexec.exe` process the tool starts. Windows Installer finishes the install in the background and keeps writing the log, and RunAsSystem just stops waiting. Starting another MSI before it finishes returns `1618`. Uninstall afterwards if you need to undo it.
 
 ## Exit Codes
 When the run finishes, the exit code is shown in colour:
@@ -58,13 +71,24 @@ When the run finishes, the exit code is shown in colour:
 - **Orange**: success with a restart required or started (`3010`, `1641`).
 - **Red**: failure.
 
-Common Windows Installer codes (`1603`, `1618`, `1619`, `1638`, and others) have plain-English descriptions. Any other code falls back to the description Windows has for that number.
+Common Windows Installer codes (`1603`, `1618`, `1619`, `1638`, and others) have plain-English descriptions. Any other code falls back to the description Windows has for that number. The hex value is shown under the code (for example `0x80070002`), which is handy for EXE installers that document their codes in hex.
 
 ## History
 Every run is saved to `%LOCALAPPDATA%\RunAsSystem\History.json`. It keeps the last 50 runs, including runs launched with `iex`.
-- **Load** (or double-click a run) puts the file, options, arguments and run mode back into the form, ready to run again.
-- **Copy** copies the run's command line.
+- Each entry shows the file, exit code, time, run mode and arguments.
+- **Load** (or double-click a run, or the load icon that appears when you hover over a run) puts the file, options, arguments and run mode back into the form, ready to run again.
+- **Copy** (or the copy icon on hover) copies the run's command line.
 - **Clear** empties the history.
+
+Arguments can contain passwords or license keys, so the arguments and command line are encrypted with Windows DPAPI. Only your Windows account on that device can read them. If you copy `History.json` to another device, the runs still appear, but their arguments can't be loaded. Those entries show a warning icon.
+
+## Keyboard Shortcuts
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Enter` or `F5` | Run as SYSTEM |
+| `Ctrl+O` | Browse for an installer |
+| `Ctrl+L` | Load the selected history entry |
+| `Ctrl+R` | Reset: clear the file, options and result, as if the tool had just opened (same as the ✕ in the File box) |
 
 ## Drag and Drop While Elevated
 Windows normally blocks drag and drop from Explorer into an elevated window, which is why GetMSIInformation asks you not to run it as administrator. RunAsSystem lets the older `WM_DROPFILES` message through the window's message filter, so drag and drop still works while elevated. You can also paste a path or use **Browse**.
@@ -83,7 +107,7 @@ Install a **Run as SYSTEM...** option for `.msi`, `.msp`, `.exe`, `.ps1`, `.cmd`
 | Parameter | Description |
 | --- | --- |
 | `-FilePath` | Installer to load when the app opens |
-| `-Arguments` | Text to pre-fill in the Arguments/Properties box |
+| `-Arguments` | Text to pre-fill in the ArgumentList box |
 
 ## Things to Know About SYSTEM
 - **Network paths**: SYSTEM connects to shares as the computer account (`DOMAIN\COMPUTER$`). The share needs to allow read access for it, and write access too if the MSI log is written there. The app warns you when the installer is on a network path.

@@ -43,7 +43,8 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
 ## Conventions
 
 - Control name prefixes: `txt_`, `btn_`, `cmb_`, `chk_`, `rad_`, `lbl_`, `txtblk_`, `lsbox_`, `panel_`, `MenuItem_`.
-- Use only the colour tokens in `Window.Resources`: `Bg`, `Surface`, `Surface2`, `Border`, `BorderMuted`, `Text`, `TextMuted`, `Accent`, `AccentHover`, `AccentText`, `Danger`, `Success`. In code, get brushes with `$formRunAsSystem.FindResource('Name')` and never hard-code colours.
+- **Layers:** `Window` (the window background, a dark stone with a hint of the site's orange) sits behind the section cards. Cards are `Bg`, inputs and the History list are `Surface`, and buttons are `Surface2`, so neighbouring layers never share a shade. Each section is a `Border` with `Style="{StaticResource Card}"` and its header inside, using `CardHeader`. The palette comes from michaeltheadmin.com (the Blowfish theme's stone and orange scales).
+- Use only the colour tokens in `Window.Resources`: `Window`, `Bg`, `Surface`, `Surface2`, `Border`, `BorderMuted`, `Text`, `TextMuted`, `Accent`, `AccentHover`, `AccentText`, `Danger`, `Success`. In code, get brushes with `$formRunAsSystem.FindResource('Name')` and never hard-code colours.
 - Log what the app does to the console with `Write-Host "Action: [$value]"`, matching the sibling tools.
 - Comment the *why*, not the *what*.
 - `ConvertFrom-Json` in 5.1 returns a JSON array as a single object, so unroll it with `| ForEach-Object { $_ }`.
@@ -53,6 +54,7 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
 
 - **Session 0 mode**: `Register-SystemTask` uses the `Schedule.Service` COM object, not the ScheduledTasks module. The task's action is the installer itself (msiexec.exe, the exe, powershell.exe, cmd.exe or cscript.exe), so the installer's exit code becomes `LastTaskResult`. Don't add a wrapper script.
   - Task settings: principal `S-1-5-18`, `LogonType` 5, `RunLevel` 1, `Priority` 4, `ExecutionTimeLimit` `PT0S`.
+  - **Current user mode** uses the same task with different principal parameters (`-UserId`, `-LogonType`, `-RunLevel`): the script account's SID, `LogonType` 3 (interactive token, so no password), and `RunLevel` 1 if the script is elevated, otherwise 0. Future user-context variations, such as the session user or forcing no elevation, should change only these parameters.
   - It has a disabled trigger that expires after 24 hours, plus `DeleteExpiredTaskAfter` `PT0S`, so a task left behind by a crash deletes itself.
   - Every task description contains `$Script:TaskMarker`. Only ever delete tasks that have the marker.
 - `Watch-SystemRun` runs on a 500 ms `DispatcherTimer`. Task states 2 (queued) and 4 (running) mean the installer is still running. `LastTaskResult` 267009 or 267011 means the task hasn't finished or hasn't started yet.
