@@ -2,7 +2,7 @@
 
 Where the project stands, the decisions behind it, and what's left to do. Update this file when one of these changes.
 
-_Last updated: 2026-10-10 (version 2026.10.10.0: Update Available installs the update, relaunches stay in the same PowerShell, and the update check waits until the window has opened)_
+_Last updated: 2026-10-10 (version 2026.10.10.0: Update Available installs the update, relaunches stay in the same PowerShell, and the update check waits until the window has opened. Also Open Log during a run, and the result clears when a different file is loaded)_
 
 ## Goal
 
@@ -35,6 +35,8 @@ Make it easy to run MSI and EXE installers (and scripts) as SYSTEM to test insta
 | Remembering choices between launches | **Not done** | History already restores a whole run, and remembered choices would conflict with resetting to the defaults when the file type changes |
 | Section cards and colours | Each section (Installer and options, Run As, Command Line, Result, History) is a `Card` border with its header inside (`CardHeader`), 10px/6px padding and a `BorderMuted` outline. File and options share one card with a thin divider, which leaves the command line about 97px; separate cards left only about 68px. The window background is a new token, `Window` (`#231915`): the darkest stone mixed with a little of the site's darkest orange. Cards are `Bg`, inputs `Surface`, buttons `Surface2` | The owner wanted clearer sections. Card fills of `Surface` with inputs in `Bg` made the inputs look like holes to the window, and an orange outline was too loud. Giving each layer its own shade fixed it. The palette matches michaeltheadmin.com (Blowfish stone and orange). **`Window` isn't in GetMSIInformation or CodeSigningTool yet**, so add it there to keep the family consistent |
 | Main form layout | The ArgumentList box wraps and grows from one line up to about three (76px), then scrolls. Enter still doesn't add a line break. The result panel is a fixed 118px, and the command line takes whatever height is left (scrolling if needed). The copy button stretches to the same height as the command line box | The command line is the part that changes length, so it gets the leftover space. The result panel always holds the same content |
+| Open Log during a run | Open Log and Open Folder are pointed at the new run when it starts, so they never open the previous run's files. Open Log is disabled until the log file exists, then enabled while the install is still running (`Watch-SystemRun` checks on its 500 ms tick, one `Test-Path` per tick until the file appears). It opens with the default app for `.log` files. The logging switch stays `/l*v` | The owner wanted to watch an MSI install while it runs. A specific viewer such as CMTrace isn't installed in a known place, and someone using Notepad can close and reopen the file. Before this, Open Log kept pointing at the previous run's log during a new run. A log panel inside the app was considered and turned down |
+| Result when the file changes | The result, Open Log and Open Folder belong to the file that was run (`$Script:ResultFilePath`). Loading a different file clears them (`Clear-RunResult`, also used by Reset). Loading the same file again keeps them | The owner noticed that a stopped run's result stayed on screen after a new file was loaded, which made it look like the result of the new file |
 | Exit code display | The decimal code is shown large, with its hex value always shown in small text underneath. The console log includes both | EXE installers often document their codes in hex, and HRESULTs are easier to look up that way |
 | Reset | A ✕ icon inside the right end of the File box (`btn_Reset`), or `Ctrl+R`, runs `Reset-Form`. It puts the window back to how it opens: no file, default options, an empty log path, the result showing "Not run yet", Open Log and Open Folder disabled, no history selection, and the default status bar text. History is kept. It's disabled during a run | The owner wanted a clean start without reopening the tool. Putting it inside the File box avoids adding a row under Browse |
 | Keyboard shortcuts | `Ctrl+Enter` and `F5` run, `Ctrl+O` browses, `Ctrl+L` loads the selected history entry, `Ctrl+R` resets. They're handled in `PreviewKeyDown` on the window and only act when the matching button is enabled. The button tooltips list the shortcuts | Requested. Checking whether the button is enabled stops a shortcut from starting a second run or loading history during a run |
@@ -71,6 +73,9 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 - [ ] The `RunAsSystem_*` task is deleted after the run, and leftover tasks are cleaned up when the app starts.
 - [ ] Closing the app during a run: the warning appears, and the task cleans up later.
 - [ ] A real MSI install, uninstall and repair, with the log written next to the installer.
+- [x] Open Log during a run: it's disabled at the start, then enabled when the MSI log appears (the status bar says so), and it opens the current run's log, not the previous one. The owner confirmed it works on 2026-10-10.
+- [x] Open Log after Stop on an MSI, while Windows Installer is still writing the log (the owner confirmed it on 2026-10-10).
+- [x] Loading a different file after a run (by Browse, drag and drop, typing or a history entry) clears the result to "Not run yet" and disables Open Log and Open Folder. Loading the same file again keeps the result (the owner confirmed it on 2026-10-10).
 - [x] PsExec mode with MSI, EXE and PS1 files.
 - [ ] The PsExec download prompt.
 - [ ] Drag and drop from Explorer into the elevated window.
@@ -127,5 +132,5 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 
 - A **"Don't save this run to history"** checkbox next to Run, plus a setting to turn history off completely, for arguments you'd rather not store even encrypted.
 - Detection-rule helper: show the Uninstall registry entries an install adds, with the product code and uninstall string.
-- A live view of the MSI log while it's being written.
+- Open Log for EXE installers that write their own log: read a log path out of the arguments (for example `/log "x"`, or `/v"/l*v x"` for an EXE that wraps an MSI) and use the same Open Log flow. Pulling a path out of free-form arguments is guesswork, so it needs care.
 - An option to copy the installer to a local cache first, like ccmcache or the IME content folder.
