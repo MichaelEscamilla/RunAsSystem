@@ -72,7 +72,7 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 
 - [x] Session 0 runs with MSI, EXE and PS1 files.
 - [ ] CMD/BAT and VBS files. A `test.cmd` containing `exit /b 3010` should show **3010** in orange.
-- [ ] The `RunAsSystem_*` task is deleted after the run, and leftover tasks are cleaned up when the app starts.
+- [x] The `RunAsSystem_*` task is deleted after the run, and leftover tasks are cleaned up when the app starts (the owner confirmed it on 2026-10-10).
 - [ ] Closing the app during a run: the warning appears, and the task cleans up later.
 - [ ] A real MSI install, uninstall and repair, with the log written next to the installer.
 - [x] Open Log during a run: it's disabled at the start, then enabled when the MSI log appears (the status bar says so), and it opens the current run's log, not the previous one. The owner confirmed it works on 2026-10-10.
@@ -80,7 +80,7 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 - [x] Loading a different file after a run (by Browse, drag and drop, typing or a history entry) clears the result to "Not run yet" and disables Open Log and Open Folder. Loading the same file again keeps the result (the owner confirmed it on 2026-10-10).
 - [x] PsExec mode with MSI, EXE and PS1 files.
 - [ ] The PsExec download prompt.
-- [ ] Drag and drop from Explorer into the elevated window.
+- [x] Drag and drop from Explorer into the elevated window (the owner confirmed it on 2026-10-10).
 - [ ] Right-click menu install and uninstall: the menu shows the UAC shield and opens the app with the file loaded. Still to check: the registry command points at powershell.exe on a device without pwsh 7.4+.
 - [x] Right-click menu uses pwsh 7.4+ when it's installed. The owner confirmed it works (2026-10-10).
 - [ ] The relaunch-as-admin step, both when the script is run from a file and when it's launched with `iex`.
@@ -112,13 +112,13 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
   - keyboard shortcuts
   - the hex exit code
 - [x] Test the keyboard shortcuts in the app. The owner confirmed they all work.
-- [ ] Test Stop in the lab, in both Session 0 and PsExec modes, with:
+- [x] Test Stop in the lab, in both Session 0 and PsExec modes, with (the owner confirmed all of them on 2026-10-10):
   - an EXE bootstrapper that starts a child process
   - a PSADT script
   - an MSI, which should show the "Stopped waiting" text in the result (it was already confirmed that the install itself carries on)
   - a run that finishes while the confirmation prompt is open
-- [ ] Test click-to-copy on the exit code in the app: decimal and hex each copy on their own, and placeholders (`--`, `Stopped`, `Error`) show no hand cursor and copy nothing.
-- [ ] Test the status bar timer in the app: a message clears after 4 seconds, a second message before then restarts the countdown, and the `-Persist` "WITHOUT its arguments" warning stays.
+- [x] Test click-to-copy on the exit code in the app: decimal and hex each copy on their own, and placeholders (`--`, `Stopped`, `Error`) show no hand cursor and copy nothing (the owner confirmed it on 2026-10-10).
+- [x] Test the status bar timer in the app: a message clears after 4 seconds, a second message before then restarts the countdown, and the `-Persist` "WITHOUT its arguments" warning stays (the owner confirmed it on 2026-10-10).
 - [ ] Run the elevated tests above.
 - [ ] Add screenshots to `Images/` and the README.
 - [ ] Optionally add a short URL on michaeltheadmin.com (like `msiapp.michaeltheadmin.com`) and update the README.
