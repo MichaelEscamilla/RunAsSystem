@@ -121,6 +121,7 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 - [ ] Optionally publish to the PowerShell Gallery. The PSGallery update channel needs it.
 - [ ] Release 2026.10.10.0. Versions from 2026.10.10.0 on install updates in place. Anyone on 2026.10.9.x still gets the release page for this one update.
 - [ ] Consider bringing two things back to GetMSIInformation: recognising a Gallery install by its `InstalledScriptInfos` file instead of `Get-InstalledScript`, which still freezes its UI for a few seconds after the window opens, and the parse check before the downloaded script replaces the old one.
+- [ ] Fill in `.COPYRIGHT`, `.LICENSEURI` and `.ICONURI` in GetMSIInformation's script info too, as RunAsSystem now does (2026-10-10). `.TAGS` is left empty in both on purpose. RunAsSystem's icon is `Images/RunAsSystem.png`, exported from `$Script:WindowIconBase64`, and the `.ICONURI` link only works once it's on `main`.
 - [ ] Consider porting GetMSIInformation's `ContentRendered` handler (`Activate()` plus toggling `Topmost`), so the window comes to the front after the UAC prompt or an update relaunch.
 
 ## Future Improvements

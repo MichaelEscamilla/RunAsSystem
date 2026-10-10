@@ -8,15 +8,15 @@
 
 .COMPANYNAME
 
-.COPYRIGHT
+.COPYRIGHT (c) 2026 Michael Escamilla
 
 .TAGS
 
-.LICENSEURI
+.LICENSEURI https://github.com/MichaelEscamilla/RunAsSystem/blob/main/LICENSE
 
 .PROJECTURI https://github.com/MichaelEscamilla/RunAsSystem
 
-.ICONURI
+.ICONURI https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/Images/RunAsSystem.png
 
 .EXTERNALMODULEDEPENDENCIES
 
