@@ -15,10 +15,11 @@ Keep changes consistent with those repos.
 
 ## Hard Constraints
 
-- **Windows PowerShell 5.1 compatible.** The tool is used on devices that only have 5.1, so don't use `??`, `?:`, `?.`, `-Parallel`, `&&`/`||`, `Join-String`, `ConvertFrom-Json -AsHashtable` or other 7-only syntax. Don't add a "relaunch in pwsh" step.
+- **Works in both Windows PowerShell 5.1 and PowerShell 7.** 5.1 is the baseline: the tool is used on devices that only have 5.1, so don't use `??`, `?:`, `?.`, `-Parallel`, `&&`/`||`, `Join-String`, `ConvertFrom-Json -AsHashtable` or other 7-only syntax. Everything must also work when it's started from pwsh. Watch for 5.1/7 differences: `Add-Type` compiles with a different compiler and needs WPF assemblies passed by `.Location`, `Invoke-WebRequest` behaves differently, and the default file encodings differ.
+- **Relaunch in the PowerShell it was started in.** Use `$Script:CurrentPowerShellPath` (built from `$PSHOME`) to relaunch for elevation or after an update, so 5.1 stays 5.1 and pwsh stays pwsh. Don't add a step that switches to pwsh when it's installed (unlike GetMSIInformation). The right-click menu and `.ps1` installers use `$Script:WindowsPowerShellPath`, because 5.1 is on every device and it's what Intune and ConfigMgr use.
 - **ASCII only in `RunAsSystem.ps1`.** Windows PowerShell 5.1 reads a `.ps1` without a BOM as ANSI, so any non-ASCII character gets mangled. In XAML use entities (`&#xE8C8;`). In PowerShell strings use `[char]0x....`. Check with: `[regex]::Matches((Get-Content RunAsSystem.ps1 -Raw), '[^\x00-\x7F]').Count` (it must be 0).
 - **Single file.** No modules, no extra script files and no external dependencies. The script must keep working when run with `iex (irm <raw url>)`, where `$PSCommandPath` is empty. Every code path that uses the script's own path needs a fallback that downloads it from `$Script:ScriptUrl`.
-- **It must run elevated.** The script relaunches itself with `-Verb RunAs` when it isn't elevated. It passes `-FilePath` through but not `-Arguments`.
+- **It must run elevated.** The script relaunches itself with `-Verb RunAs` when it isn't elevated. It passes `-FilePath` through but not `-Arguments`. The update relaunch (`Restart-Script`) also passes only `-FilePath`. It doesn't need `-Verb RunAs`, because the app is already elevated.
 
 ## Structure of `RunAsSystem.ps1`
 
@@ -67,10 +68,26 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
 
   Don't replace it with WPF `AllowDrop` events: those use OLE drag and drop, which Windows (UIPI) blocks into an elevated window.
 
+## How Updating Works
+
+- **Check:** `$Script:TestForUpdate` reads the latest GitHub release and compares its tag with `$Script:ScriptVersion`.
+  - At startup it runs in a runspace (`Start-BackgroundUpdateCheck`). The `Loaded` handler queues it with `Dispatcher.InvokeAsync` at `ApplicationIdle`, so the window draws first. This is the same as GetMSIInformation.
+  - **Check for Updates** runs it straight away, without the runspace.
+- **Launch channel:** `Get-UpdateChannel` works out how the script was launched, once, in `$Script:UpdateChannel`. The result is `Web` (empty `$PSCommandPath`), `RightClick` (running from `$Script:RightClickMenuFolderPath`), `PSGallery` or `LooseFile`.
+  - Recognise a Gallery install by `InstalledScriptInfos\RunAsSystem_InstalledScriptInfo.xml` next to the script. **Don't call `Get-InstalledScript` at startup.** It loads PowerShellGet and freezes the UI for 4-6 seconds.
+- **Update Available** click:
+  - `RightClick` and `LooseFile`: `Update-ScriptFile` downloads `https://raw.githubusercontent.com/<repo>/<tag>/RunAsSystem.ps1` to `%TEMP%`, checks that it parses, then copies it over `$PSCommandPath`.
+  - `PSGallery`: runs `Update-Script`.
+  - Either way, `Restart-Script` then starts the new copy with `-FilePath` and closes the window.
+  - Every failure, and the `Web` channel, falls back to `Open-ReleasePage`.
+  - Updating is refused while `$Script:CurrentRun` is set.
+- Release tags must have `RunAsSystem.ps1` at the repo root, because the download URL is built from the tag.
+
 ## Releasing
 
 - To release, bump **both** `.VERSION` in `PSScriptInfo` and `$Script:ScriptVersion`. The format is `yyyy.M.d.n`, for example `2026.10.6.0`.
-- Add a `.RELEASENOTES` line in the format `<version>   - <note>`, with continuation lines indented.
+- Add a `.RELEASENOTES` line in the format `<version>   - <note>`, with continuation lines indented. Pad after the version so that every ` - ` lines up at the same column. The workflow turns each line into a bullet, so put one change on each line.
+- Don't leave `$Script:ScriptVersion` lowered after testing the update. Check that both version fields match before releasing.
 - `.github/workflows/release.yml` (manual dispatch) builds the GitHub release from those notes. The in-app update check compares against the latest release tag.
 - `.github/workflows/publish-module.yaml` publishes the script to the PowerShell Gallery.
 
@@ -78,12 +95,14 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
 
 There's no automated test suite. Before you finish:
 
-1. Check that the script parses in **Windows PowerShell 5.1**:
+1. Check that the script parses in **Windows PowerShell 5.1** and in **pwsh** (swap `powershell.exe` for `pwsh`):
+
    ```powershell
    powershell.exe -NoProfile -Command "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('RunAsSystem.ps1',[ref]$null,[ref]$e); $e"
    ```
 
 2. Run the ASCII check above.
-3. Run the app elevated in 5.1 and test the change by hand:
+3. Run the app elevated in 5.1 and test the change by hand. If the change touches anything that behaves differently in 7 (`Add-Type`, web requests, JSON, file encoding or relaunching), test it in pwsh too.
    - For Session 0, a `test.cmd` that contains `exit /b 3010` is a quick way to check exit code handling.
    - Confirm in Task Scheduler that the `RunAsSystem_*` task is removed afterwards.
+   - To test updating, copy the script to a temp folder and lower `$Script:ScriptVersion` in the copy. Don't do it in the repo file. Clicking **Update Available** overwrites that copy with the latest release.

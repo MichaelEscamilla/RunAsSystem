@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 2026.10.9.1
+.VERSION 2026.10.10.0
 
 .GUID 8f2d6c1e-4b7a-4e3f-9a5d-2c8b1e7f6a40
 
@@ -25,6 +25,13 @@
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
+2026.10.10.0  - Clicking Update Available now installs the update and reopens the tool with the same file loaded, like GetMSIInformation
+              A downloaded or right-click menu copy of the script is replaced with the new version, and a PowerShell Gallery install is updated with Update-Script
+              If the update can't be installed (offline, the file is locked or the download is damaged), the release page opens instead
+              Launched with iex (irm ...), it still opens the release page, since the next launch is already the latest
+              Updating is blocked while an installer is running, so the run's exit code isn't lost
+              Relaunching as administrator, or after an update, now uses the PowerShell the tool was started in, so starting from pwsh no longer drops to Windows PowerShell 5.1
+              The window opens faster: the update check now runs after the window has appeared
 2026.10.9.1   - Credit Ben Whitmore and his Patch My PC Connectivity tool, which inspired RunAsSystem, in the README and the script help
 2026.10.9.0   - Arguments and command lines saved in history are now encrypted with DPAPI, so only your Windows account on that device can read them
               History entries show their arguments, with Load and Copy buttons when you hover over an entry
@@ -90,7 +97,7 @@ param (
 # Script Name
 $Script:ScriptName = "RunAsSystem.ps1"
 # Script Version
-[System.Version]$Script:ScriptVersion = "2026.10.9.1"
+[System.Version]$Script:ScriptVersion = "2026.10.10.0"
 # App Data folder (history and right-click menu files)
 $Script:AppDataPath = "$env:LOCALAPPDATA\RunAsSystem"
 $Script:HistoryPath = "$Script:AppDataPath\History.json"
@@ -114,13 +121,19 @@ $Script:UpdateCheckHeaders = @{
   'User-Agent' = 'RunAsSystem-UpdateCheck'
   'Accept'     = 'application/vnd.github+json'
 }
+# How this script was launched (Web, RightClick, PSGallery or LooseFile), which decides how it updates
+$Script:UpdateChannel = $null
 # Get the Security Principal
 $Script:currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 # The account running this script, used by Current user mode
 $Script:CurrentUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $Script:CurrentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-# Windows PowerShell 5.1 path (used for the right-click menu and relaunching)
+# Windows PowerShell 5.1 path (used for the right-click menu, since it's on every device)
 $Script:WindowsPowerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+# The PowerShell running this script, so relaunches stay in it (pwsh stays pwsh, 5.1 stays 5.1).
+# $PSHOME rather than the process path, which is Code.exe or powershell_ise.exe when run from an editor.
+$Script:CurrentPowerShellPath = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+if (-not (Test-Path -LiteralPath $Script:CurrentPowerShellPath)) { $Script:CurrentPowerShellPath = $Script:WindowsPowerShellPath }
 # Current run state
 $Script:CurrentRun = $null
 # Type of the last file loaded, so the options can be reset when the type changes
@@ -157,7 +170,7 @@ function Invoke-RelaunchElevated {
   }
 
   try {
-    Start-Process -FilePath $Script:WindowsPowerShellPath -ArgumentList $ArgumentList -Verb RunAs -ErrorAction Stop
+    Start-Process -FilePath $Script:CurrentPowerShellPath -ArgumentList $ArgumentList -Verb RunAs -ErrorAction Stop
   }
   catch {
     Add-Type -AssemblyName PresentationFramework
@@ -1434,6 +1447,7 @@ $Script:TestForUpdate = {
     UpdateAvailable = ($latestVersion -gt $CurrentVersion)
     LatestVersion   = $latestVersion
     HtmlUrl         = $release.html_url
+    Tag             = $release.tag_name
   }
 }
 
@@ -1442,6 +1456,9 @@ function Start-BackgroundUpdateCheck {
   # then polls for completion on the UI thread.
   [CmdletBinding()]
   param()
+
+  # Detect the launch channel once, so clicking 'Update Available' doesn't have to
+  if (-not $Script:UpdateChannel) { $Script:UpdateChannel = Get-UpdateChannel }
 
   try {
     $Script:UpdatePowerShell = [powershell]::Create()
@@ -1487,8 +1504,104 @@ function Show-UpdateAvailable {
   if (-not $Result.UpdateAvailable) { return }
 
   $Script:LatestReleaseUrl = if ($Result.HtmlUrl) { $Result.HtmlUrl } else { $Script:ReleasesPageUrl }
+  $Script:LatestReleaseTag = $Result.Tag
   $MenuItem_UpdateAvailable.Header = "Update Available: v$($Result.LatestVersion)"
   $MenuItem_UpdateAvailable.Visibility = [System.Windows.Visibility]::Visible
+}
+
+function Get-UpdateChannel {
+  # Works out how the script was launched, so the update replaces the right copy.
+  # RightClick is checked before LooseFile because both have a script path on disk.
+  [CmdletBinding()]
+  param()
+
+  if ([string]::IsNullOrEmpty($PSCommandPath)) {
+    # iex (irm ...): nothing on disk to update, and the next launch is always the latest
+    $Channel = 'Web'
+  }
+  else {
+    $ScriptFolder = Split-Path -Path $PSCommandPath -Parent
+    if ($ScriptFolder -eq $Script:RightClickMenuFolderPath) {
+      $Channel = 'RightClick'
+    }
+    else {
+      # Install-Script records the install in this file next to the script. Checking for it directly
+      # avoids Get-InstalledScript, which loads PowerShellGet and held up the window by 4-6 seconds.
+      $InstalledInfo = Join-Path -Path $ScriptFolder -ChildPath 'InstalledScriptInfos\RunAsSystem_InstalledScriptInfo.xml'
+      if (Test-Path -LiteralPath $InstalledInfo) {
+        $Channel = 'PSGallery'
+      }
+      else {
+        $Channel = 'LooseFile'
+      }
+    }
+  }
+
+  Write-Host "Update channel: [$Channel]"
+  return $Channel
+}
+
+function Open-ReleasePage {
+  # Fallback for every update path: open the newer release, or the releases list
+  if ($Script:LatestReleaseUrl) { Start-Process $Script:LatestReleaseUrl }
+  else { Start-Process $Script:ReleasesPageUrl }
+}
+
+function Update-ScriptFile {
+  # Replaces the .ps1 with the script from the release tag. Returns $false when it can't
+  # (offline, locked, read-only), so the caller can fall back to the release page.
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ScriptPath,
+    [Parameter(Mandatory = $true)]
+    [string]$Tag
+  )
+
+  $DownloadUrl = "https://raw.githubusercontent.com/$($Script:GitHubRepo)/$Tag/$($Script:ScriptName)"
+  $TempFile = Join-Path -Path $env:TEMP -ChildPath 'RunAsSystem.update.ps1'
+
+  try {
+    Write-Host "Downloading update: [$DownloadUrl]"
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempFile -UseBasicParsing -ErrorAction Stop
+    if (-not (Test-Path -LiteralPath $TempFile) -or (Get-Item -LiteralPath $TempFile).Length -eq 0) {
+      throw 'The downloaded file is empty.'
+    }
+    # Never replace a working script with one that won't run (a truncated download or an error page)
+    $ParseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($TempFile, [ref]$null, [ref]$ParseErrors)
+    if ($ParseErrors) {
+      throw "The downloaded script has $(@($ParseErrors).Count) parse error(s)."
+    }
+    Write-Host "Replacing script:   [$ScriptPath]"
+    Copy-Item -LiteralPath $TempFile -Destination $ScriptPath -Force -ErrorAction Stop
+    return $true
+  }
+  catch {
+    Write-Host "Update failed: $($_.Exception.Message)"
+    return $false
+  }
+  finally {
+    Remove-Item -LiteralPath $TempFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Restart-Script {
+  # Starts the updated script and closes this window. This process is already elevated, so the
+  # new one is too, without a UAC prompt. Only the file is carried over, like the elevation relaunch.
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ScriptPath,
+    [string]$FilePath
+  )
+
+  $ArgumentList = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$ScriptPath`""
+  if ($FilePath) { $ArgumentList += " -FilePath `"$FilePath`"" }
+
+  Write-Host "Relaunching updated script: [$ScriptPath]"
+  Start-Process -FilePath $Script:CurrentPowerShellPath -ArgumentList $ArgumentList
+  $formRunAsSystem.Close()
 }
 
 #### Right Click Menu ####
@@ -3005,8 +3118,10 @@ $formRunAsSystem.Add_Loaded({
     # Load history
     Update-HistoryList
 
-    # Background update check (non-blocking).
-    Start-BackgroundUpdateCheck
+    # Defer the update check until the window has rendered and come to the foreground.
+    $formRunAsSystem.Dispatcher.InvokeAsync({
+        Start-BackgroundUpdateCheck
+      }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null
 
     # Pre-fill from parameters
     if ($Arguments) { $txt_Arguments.Text = $Arguments }
@@ -3199,9 +3314,44 @@ $MenuItem_CheckForUpdates.Add_Click({
   })
 
 $MenuItem_UpdateAvailable.Add_Click({
-    # Open the download page for the newer release.
-    if ($Script:LatestReleaseUrl) { Start-Process $Script:LatestReleaseUrl }
-    else { Start-Process $Script:ReleasesPageUrl }
+    # Relaunching closes the window, which would orphan the run's exit code
+    if ($Script:CurrentRun) {
+      Set-StatusBar -Warning -Text "Wait for the current run to finish before updating"
+      return
+    }
+
+    # Reopen the loaded file in the updated instance
+    $CurrentFile = $txt_FilePath.Text.Trim().Trim('"')
+
+    switch ($Script:UpdateChannel) {
+      'PSGallery' {
+        try {
+          Write-Host "Updating via PowerShell Gallery: [Update-Script RunAsSystem -Force]"
+          Update-Script -Name 'RunAsSystem' -Force -ErrorAction Stop
+          $Installed = Get-InstalledScript -Name 'RunAsSystem' -ErrorAction SilentlyContinue
+          $UpdatedPath = if ($Installed) { Join-Path $Installed.InstalledLocation $Script:ScriptName } else { $PSCommandPath }
+          Restart-Script -ScriptPath $UpdatedPath -FilePath $CurrentFile
+        }
+        catch {
+          Write-Host "PowerShell Gallery update failed: $($_.Exception.Message)"
+          Open-ReleasePage
+        }
+      }
+      { $_ -in 'RightClick', 'LooseFile' } {
+        # The registry entry points at the script path, not its contents, so the right-click menu needs no changes
+        if ($Script:LatestReleaseTag -and (Update-ScriptFile -ScriptPath $PSCommandPath -Tag $Script:LatestReleaseTag)) {
+          Restart-Script -ScriptPath $PSCommandPath -FilePath $CurrentFile
+        }
+        else {
+          Set-StatusBar -Warning -Text "Couldn't update the script in place, opening the release page"
+          Open-ReleasePage
+        }
+      }
+      default {
+        # Web: the next iex launch is already the latest
+        Open-ReleasePage
+      }
+    }
   })
 
 #### Title Bar Handlers ####

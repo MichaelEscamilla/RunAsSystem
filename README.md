@@ -120,7 +120,18 @@ Install a **Run as SYSTEM...** option for `.msi`, `.msp`, `.exe`, `.ps1`, `.cmd`
 - **Mapped drives**: drive letters you mapped in your normal session aren't available to elevated apps or to SYSTEM. Use the UNC path instead.
 - **Session 0 has no UI**: if an installer waits for input in Session 0, it waits forever. Switch to **Interactive (PsExec)** to see what it's waiting for.
 
+## Updates
+The app checks GitHub for a newer release after it opens. If one exists, an **Update Available** item appears in the menu bar. **About > Check for Updates** checks again on demand.
+
+Clicking **Update Available** installs the update and reopens the app with the same file loaded:
+
+- **Downloaded script or right-click menu copy**: the script file is replaced with the new release.
+- **Installed from the PowerShell Gallery**: the app runs `Update-Script RunAsSystem`.
+- **Launched with `iex (irm ...)`**: the release page opens. Nothing is saved on disk, and the next launch is already the latest.
+
+If the update can't be installed (you're offline, the file is locked or the download is damaged), the release page opens instead. You can't update while an installer is running.
+
 ## Requirements
-- Windows PowerShell 5.1 (it also runs in PowerShell 7, but doesn't need it)
+- Windows PowerShell 5.1, or PowerShell 7. When the app relaunches as administrator or after an update, it uses the same PowerShell you started it in.
 - Administrator rights
 - Internet access only for the update check and the optional PsExec download
