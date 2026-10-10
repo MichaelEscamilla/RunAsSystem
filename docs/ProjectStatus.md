@@ -2,7 +2,7 @@
 
 Where the project stands, the decisions behind it, and what's left to do. Update this file when one of these changes.
 
-_Last updated: 2026-10-09 (version 2026.10.9.0: history encryption, Stop, Reset, Current user mode, card layout)_
+_Last updated: 2026-10-09 (version 2026.10.9.1: credits for Ben Whitmore and the Patch My PC Connectivity tool)_
 
 ## Goal
 
