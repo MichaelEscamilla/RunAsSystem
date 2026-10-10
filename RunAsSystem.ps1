@@ -96,6 +96,9 @@ $Script:UpdateCheckHeaders = @{
 }
 # Get the Security Principal
 $Script:currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+# The account running this script, used by Current user mode
+$Script:CurrentUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$Script:CurrentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 # Windows PowerShell 5.1 path (used for the right-click menu and relaunching)
 $Script:WindowsPowerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 # Current run state
@@ -160,6 +163,21 @@ function Get-InstallerType {
     '.vbs' { return 'VBS' }
   }
   return $null
+}
+
+function Get-ModeText {
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Mode,
+    [Parameter(Mandatory = $false)]
+    [switch]$Short
+  )
+
+  switch ($Mode) {
+    'PsExec' { if ($Short) { 'PsExec' } else { 'Interactive (PsExec)' } }
+    'CurrentUser' { 'Current user' }
+    default { 'Session 0' }
+  }
 }
 
 function Get-DefaultLogPath {
@@ -249,7 +267,7 @@ function Get-FormState {
     LogEnabled = [bool]$chk_Log.IsChecked
     LogPath    = $txt_LogPath.Text.Trim().Trim('"')
     Arguments  = $txt_Arguments.Text.Trim()
-    Mode       = if ($rad_PsExec.IsChecked) { 'PsExec' } else { 'Session0' }
+    Mode       = if ($rad_PsExec.IsChecked) { 'PsExec' } elseif ($rad_CurrentUser.IsChecked) { 'CurrentUser' } else { 'Session0' }
   }
 }
 
@@ -266,7 +284,11 @@ function Set-FormState {
   $chk_Log.IsChecked = [bool]$State.LogEnabled
   if ($State.LogPath) { $txt_LogPath.Text = $State.LogPath }
   $txt_Arguments.Text = $State.Arguments
-  if ($State.Mode -eq 'PsExec') { $rad_PsExec.IsChecked = $true } else { $rad_Session0.IsChecked = $true }
+  switch ($State.Mode) {
+    'PsExec' { $rad_PsExec.IsChecked = $true }
+    'CurrentUser' { $rad_CurrentUser.IsChecked = $true }
+    default { $rad_Session0.IsChecked = $true }
+  }
   $txt_LogPath.IsEnabled = [bool]$chk_Log.IsChecked
   Update-CommandPreview
 }
@@ -422,6 +444,11 @@ function Get-PsExecArguments {
 function Update-CommandPreview {
   $State = Get-FormState
   $Spec = Get-CommandSpec -State $State
+
+  # While a run is in progress the button shows the elapsed time instead
+  if (-not $Script:CurrentRun) {
+    $btn_Run.Content = if ($State.Mode -eq 'CurrentUser') { 'Run as Current User' } else { 'Run as SYSTEM' }
+  }
 
   if (-not $Spec) {
     $txt_CommandLine.Text = ''
@@ -587,7 +614,15 @@ function Register-SystemTask {
     [Parameter(Mandatory = $false)]
     [string]$TaskArguments,
     [Parameter(Mandatory = $false)]
-    [string]$WorkingDirectory
+    [string]$WorkingDirectory,
+    # Who the task runs as. The defaults are SYSTEM in session 0. Current user mode passes the user's SID,
+    # 3 (TASK_LOGON_INTERACTIVE_TOKEN: their existing logon, no password, on their desktop) and the run level.
+    [Parameter(Mandatory = $false)]
+    [string]$UserId = 'S-1-5-18',
+    [Parameter(Mandatory = $false)]
+    [int]$LogonType = 5,
+    [Parameter(Mandatory = $false)]
+    [int]$RunLevel = 1
   )
 
   $Service = Connect-TaskService
@@ -596,7 +631,7 @@ function Register-SystemTask {
 
   # Registration Info - the marker identifies tasks this tool owns, so nothing else is ever touched
   $Definition.RegistrationInfo.Author = 'RunAsSystem'
-  $Definition.RegistrationInfo.Description = "$($Script:TaskMarker)`nTemporary task created by Run As SYSTEM to run an installer as NT AUTHORITY\SYSTEM. It has no active trigger, only runs on demand, and is deleted when the run finishes (or automatically when it expires)."
+  $Definition.RegistrationInfo.Description = "$($Script:TaskMarker)`nTemporary task created by Run As SYSTEM to run an installer. It has no active trigger, only runs on demand, and is deleted when the run finishes (or automatically when it expires)."
 
   # Settings
   $Definition.Settings.Enabled = $true
@@ -628,16 +663,16 @@ function Register-SystemTask {
   if ($TaskArguments) { $Action.Arguments = $TaskArguments }
   if ($WorkingDirectory) { $Action.WorkingDirectory = $WorkingDirectory }
 
-  # Principal - SYSTEM, highest privileges
-  $Definition.Principal.UserId = 'S-1-5-18'
-  $Definition.Principal.LogonType = 5
-  $Definition.Principal.RunLevel = 1
+  # Principal - RunLevel 1 = highest available, 0 = limited (not elevated)
+  $Definition.Principal.UserId = $UserId
+  $Definition.Principal.LogonType = $LogonType
+  $Definition.Principal.RunLevel = $RunLevel
 
-  # 6 = CREATE_OR_UPDATE, 5 = TASK_LOGON_SERVICE_ACCOUNT. Two forms - Windows builds differ
-  try { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, $null, $null, 5) }
-  catch { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, 'S-1-5-18', $null, 5) }
+  # 6 = CREATE_OR_UPDATE. Two forms - Windows builds differ
+  try { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, $null, $null, $LogonType) }
+  catch { $null = $Folder.RegisterTaskDefinition($TaskName, $Definition, 6, $UserId, $null, $LogonType) }
 
-  Write-Host "Registered Scheduled Task: [\$TaskName]"
+  Write-Host "Registered Scheduled Task: [\$TaskName] as [$UserId] LogonType [$LogonType] RunLevel [$RunLevel]"
   return $Folder.GetTask($TaskName)
 }
 
@@ -707,7 +742,7 @@ function Set-RunningState {
     [bool]$Running
   )
 
-  foreach ($Control in @($txt_FilePath, $btn_Reset, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $btn_HistoryLoad, $btn_HistoryClear)) {
+  foreach ($Control in @($txt_FilePath, $btn_Reset, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $txt_Arguments, $rad_Session0, $rad_PsExec, $rad_CurrentUser, $btn_HistoryLoad, $btn_HistoryClear)) {
     $Control.IsEnabled = -not $Running
   }
 
@@ -719,7 +754,7 @@ function Set-RunningState {
     $btn_Run.Content = 'Running...'
   }
   else {
-    $btn_Run.Content = 'Run as SYSTEM'
+    # Update-CommandPreview below puts the Run button text back for the selected mode
     # Restore the per-file-type enabled states
     $cmb_MsiAction.IsEnabled = ((Get-InstallerType -Path $txt_FilePath.Text.Trim().Trim('"')) -eq 'MSI')
     $txt_LogPath.IsEnabled = [bool]$chk_Log.IsChecked
@@ -794,9 +829,10 @@ function Start-SystemRun {
   }
 
   Set-RunningState -Running $true
-  $ModeText = if ($State.Mode -eq 'PsExec') { 'Interactive (PsExec)' } else { 'Session 0' }
-  Set-ResultDisplay -ExitCodeText '...' -Meaning 'Running as NT AUTHORITY\SYSTEM' -Details "$ModeText  |  Started $($Script:CurrentRun.Started.ToString('T'))"
-  Write-Host "Running as SYSTEM [$($State.Mode)]: $($Script:CurrentRun.CommandRun)"
+  $ModeText = Get-ModeText -Mode $State.Mode
+  $RunningAs = if ($State.Mode -eq 'CurrentUser') { $Script:CurrentUserName } else { 'NT AUTHORITY\SYSTEM' }
+  Set-ResultDisplay -ExitCodeText '...' -Meaning "Running as $RunningAs" -Details "$ModeText  |  Started $($Script:CurrentRun.Started.ToString('T'))"
+  Write-Host "Running as [$RunningAs] [$($State.Mode)]: $($Script:CurrentRun.CommandRun)"
 
   try {
     if ($State.Mode -eq 'PsExec') {
@@ -808,7 +844,19 @@ function Start-SystemRun {
     else {
       $TaskName = "$($Script:TaskNamePrefix)$(Get-Date -Format 'yyyyMMdd_HHmmss')"
       $Script:CurrentRun.TaskName = $TaskName
-      $Task = Register-SystemTask -TaskName $TaskName -Execute $Spec.Execute -TaskArguments $Spec.Arguments -WorkingDirectory $Spec.WorkingDirectory
+      $TaskParams = @{
+        TaskName         = $TaskName
+        Execute          = $Spec.Execute
+        TaskArguments    = $Spec.Arguments
+        WorkingDirectory = $Spec.WorkingDirectory
+      }
+      if ($State.Mode -eq 'CurrentUser') {
+        # The account running this script, with the same elevation this script has
+        $TaskParams.UserId = $Script:CurrentUserSid
+        $TaskParams.LogonType = 3
+        $TaskParams.RunLevel = if (Test-IsAdmin) { 1 } else { 0 }
+      }
+      $Task = Register-SystemTask @TaskParams
       try { $null = $Task.Run($null) }
       catch { $null = $Task.RunEx($null, 0, 0, $null) }
     }
@@ -848,7 +896,8 @@ function Watch-SystemRun {
   # 267009 = currently running, 267011 = has not run yet
   if ($Status.LastTaskResult -in 267009, 267011) {
     if ($Status.LastTaskResult -eq 267011 -and $Elapsed.TotalSeconds -gt 30) {
-      Complete-SystemRun -ErrorMessage "The Scheduled Task did not start within 30 seconds."
+      $Hint = if ($Run.Mode -eq 'CurrentUser') { " An interactive task only starts for an account that is signed in to Windows. If Run As SYSTEM was elevated with a different account, that account isn't signed in." } else { '' }
+      Complete-SystemRun -ErrorMessage "The Scheduled Task did not start within 30 seconds.$Hint"
     }
     return
   }
@@ -946,7 +995,7 @@ function Complete-SystemRun {
   if ($Run.TaskName) { Remove-SystemTask -TaskName $Run.TaskName }
 
   $Duration = (Get-Date) - $Run.Started
-  $ModeText = if ($Run.Mode -eq 'PsExec') { 'Interactive (PsExec)' } else { 'Session 0' }
+  $ModeText = Get-ModeText -Mode $Run.Mode
   $Details = "$ModeText  |  Started $($Run.Started.ToString('T'))  |  Duration $($Duration.ToString('hh\:mm\:ss'))"
 
   if ($Stopped) {
@@ -1142,7 +1191,7 @@ function Update-HistoryList {
 
     # Line 2: When and how
     $Line2 = New-Object System.Windows.Controls.TextBlock
-    $ModeText = if ($Entry.Mode -eq 'PsExec') { 'PsExec' } else { 'Session 0' }
+    $ModeText = Get-ModeText -Mode $Entry.Mode -Short
     $ActionText = if ($Entry.MsiAction -and (Get-InstallerType -Path $Entry.FilePath) -eq 'MSI') { "$($Entry.MsiAction)  |  " } else { '' }
     $Line2.Text = "$($Entry.Timestamp)  |  $ActionText$ModeText"
     $Line2.FontSize = 11
@@ -2643,7 +2692,7 @@ Add-Type -AssemblyName WindowsBase
           <!-- RUN AS -->
           <TextBlock Grid.Row="7"
               Style="{StaticResource SectionHeader}"
-              Text="RUN AS NT AUTHORITY\SYSTEM"/>
+              Text="RUN AS"/>
           <StackPanel Grid.Row="8"
               Margin="100,0,0,4">
             <RadioButton Name="rad_Session0"
@@ -2652,7 +2701,7 @@ Add-Type -AssemblyName WindowsBase
               <TextBlock>
                 <Run Text="Session 0"
                     FontWeight="SemiBold"/>
-                <Run Text=" - hidden, no desktop. The same as ConfigMgr and Intune."
+                <Run Text=" - SYSTEM, hidden, no desktop. The same as ConfigMgr and Intune."
                     Foreground="{StaticResource TextMuted}"/>
               </TextBlock>
             </RadioButton>
@@ -2661,7 +2710,17 @@ Add-Type -AssemblyName WindowsBase
               <TextBlock>
                 <Run Text="Interactive (PsExec)"
                     FontWeight="SemiBold"/>
-                <Run Text=" - installer UI is visible on your desktop."
+                <Run Text=" - SYSTEM, installer UI is visible on your desktop."
+                    Foreground="{StaticResource TextMuted}"/>
+              </TextBlock>
+            </RadioButton>
+            <RadioButton Name="rad_CurrentUser"
+                GroupName="RunMode">
+              <TextBlock>
+                <Run Text="Current user"
+                    FontWeight="SemiBold"/>
+                <!-- Filled in on load with the account and its elevation -->
+                <Run Name="txtblk_CurrentUserDetail"
                     Foreground="{StaticResource TextMuted}"/>
               </TextBlock>
             </RadioButton>
@@ -2875,6 +2934,10 @@ $formRunAsSystem.Add_Loaded({
     $MenuItem_Version.Header = "Version $($Script:ScriptVersion)"
     $txtblk_TitleVersion.Text = " $($Script:ScriptVersion)"
 
+    # Show who Current user mode runs as, since it follows this script's account and elevation
+    $Elevation = if (Test-IsAdmin) { 'elevated' } else { 'not elevated' }
+    $txtblk_CurrentUserDetail.Text = " - $($Script:CurrentUserName) ($Elevation), installer UI is visible on your desktop."
+
     # Remove any tasks left behind by a previous session
     Clear-StaleSystemTasks
 
@@ -2936,6 +2999,7 @@ $chk_Log.Add_Click({
   })
 $rad_Session0.Add_Checked({ Update-CommandPreview })
 $rad_PsExec.Add_Checked({ Update-CommandPreview })
+$rad_CurrentUser.Add_Checked({ Update-CommandPreview })
 
 $btn_Browse.Add_Click({
     $OpenFileDialog = New-Object Microsoft.Win32.OpenFileDialog
