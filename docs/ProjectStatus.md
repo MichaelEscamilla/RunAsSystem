@@ -74,7 +74,7 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 - [ ] Drag and drop from Explorer into the elevated window.
 - [ ] Right-click menu install and uninstall: the menu shows the UAC shield and opens the app with the file loaded.
 - [ ] The relaunch-as-admin step, both when the script is run from a file and when it's launched with `iex`.
-- [ ] Current user mode elevated: the installer should run as your account at High integrity (`whoami /groups`), with the exit code reported and the task removed. Tested only non-elevated so far (Medium integrity, 3010 returned, task removed).
+- [x] Current user mode elevated. The owner tested it in the lab on 2026-10-09 and it works. It was also tested non-elevated while building: Medium integrity, 3010 returned, task removed.
 - [ ] Current user mode when RunAsSystem is elevated with a different admin account than the one signed in. Does the interactive task start, and as which account?
 - [ ] The update check (it needs a published GitHub release first).
 
