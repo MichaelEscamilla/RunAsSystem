@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 2026.10.6.0
+.VERSION 2026.10.9.0
 
 .GUID 8f2d6c1e-4b7a-4e3f-9a5d-2c8b1e7f6a40
 
@@ -25,6 +25,18 @@
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
+2026.10.9.0   - Arguments and command lines saved in history are now encrypted with DPAPI, so only your Windows account on that device can read them
+              History entries show their arguments, with Load and Copy buttons when you hover over an entry
+              New Current user run mode: runs the installer as the account running the tool, through a scheduled task
+              New Stop button that ends the running process and anything it started (an MSI install keeps running in Windows Installer)
+              New Reset button (or Ctrl+R) that puts the window back to how it opens
+              Keyboard shortcuts: Ctrl+Enter or F5 to run, Ctrl+O to browse, Ctrl+L to load from history, Ctrl+R to reset
+              The hex exit code is always shown under the decimal code
+              MSI logs are named after the action, for example Setup.msi.Install.log and Setup.msi.Uninstall.log
+              Choosing a file of a different type resets the options
+              The arguments box is now called ArgumentList, wraps long text and grows to about three lines
+              Sections are grouped into cards, with a new window background colour
+              Removed the /norestart checkbox (type /norestart in ArgumentList when needed)
 2026.10.6.0   - Initial release
 
 .PRIVATEDATA
@@ -70,7 +82,7 @@ param (
 # Script Name
 $Script:ScriptName = "RunAsSystem.ps1"
 # Script Version
-[System.Version]$Script:ScriptVersion = "2026.10.6.0"
+[System.Version]$Script:ScriptVersion = "2026.10.9.0"
 # App Data folder (history and right-click menu files)
 $Script:AppDataPath = "$env:LOCALAPPDATA\RunAsSystem"
 $Script:HistoryPath = "$Script:AppDataPath\History.json"
@@ -1581,6 +1593,10 @@ Add-Type -AssemblyName WindowsBase
 
   <Window.Resources>
     <!-- Color tokens (michaeltheadmin.com palette) -->
+    <!-- Window: the darkest stone (#1C1917) with a little of the site's darkest orange (#7C2D12),
+         so the window behind the cards has its own shade instead of matching a card or an input -->
+    <SolidColorBrush x:Key="Window"
+        Color="#231915"/>
     <SolidColorBrush x:Key="Bg"
         Color="#292524"/>
     <SolidColorBrush x:Key="Surface"
@@ -1980,6 +1996,9 @@ Add-Type -AssemblyName WindowsBase
     <Style TargetType="ComboBox">
       <Setter Property="Foreground"
           Value="{StaticResource Text}"/>
+      <!-- Bound through the template so a card can make it darker than its own Surface background -->
+      <Setter Property="Background"
+          Value="{StaticResource Surface}"/>
       <Setter Property="Margin"
           Value="2.5"/>
       <Setter Property="Cursor"
@@ -1990,11 +2009,12 @@ Add-Type -AssemblyName WindowsBase
             <Grid>
               <ToggleButton Focusable="False"
                   ClickMode="Press"
+                  Background="{TemplateBinding Background}"
                   IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                 <ToggleButton.Template>
                   <ControlTemplate TargetType="ToggleButton">
                     <Border x:Name="Bd"
-                        Background="{StaticResource Surface}"
+                        Background="{TemplateBinding Background}"
                         BorderBrush="{StaticResource Border}"
                         BorderThickness="1"
                         CornerRadius="6">
@@ -2175,6 +2195,25 @@ Add-Type -AssemblyName WindowsBase
       </Setter>
     </Style>
 
+    <!-- Section card. Four layers, each its own shade: the tinted Window behind, the card (Bg) slightly
+         raised, inputs (Surface) darker inside it, and buttons (Surface2) lighter -->
+
+    <Style x:Key="Card"
+        TargetType="Border">
+      <Setter Property="Background"
+          Value="{StaticResource Bg}"/>
+      <Setter Property="BorderBrush"
+          Value="{StaticResource BorderMuted}"/>
+      <Setter Property="BorderThickness"
+          Value="1"/>
+      <Setter Property="CornerRadius"
+          Value="8"/>
+      <Setter Property="Margin"
+          Value="2.5"/>
+      <Setter Property="Padding"
+          Value="10,6"/>
+    </Style>
+
     <!-- Muted section label -->
     <Style x:Key="SectionHeader"
         TargetType="TextBlock">
@@ -2188,6 +2227,16 @@ Add-Type -AssemblyName WindowsBase
           Value="Center"/>
       <Setter Property="Margin"
           Value="5,0,0,0"/>
+    </Style>
+
+    <!-- Section header inside the top of a card -->
+    <Style x:Key="CardHeader"
+        TargetType="TextBlock"
+        BasedOn="{StaticResource SectionHeader}">
+      <Setter Property="Margin"
+          Value="0,0,0,4"/>
+      <Setter Property="HorizontalAlignment"
+          Value="Left"/>
     </Style>
 
     <!-- Thin scrollbar -->
@@ -2454,7 +2503,7 @@ Add-Type -AssemblyName WindowsBase
     </Style>
   </Window.Resources>
 
-  <Border Background="{StaticResource Bg}"
+  <Border Background="{StaticResource Window}"
       CornerRadius="12"
       BorderBrush="{StaticResource BorderMuted}"
       BorderThickness="1"
@@ -2553,206 +2602,206 @@ Add-Type -AssemblyName WindowsBase
 
         <!-- Left: Installer, options and result -->
         <Grid Grid.Column="0">
+          <!-- Each section is a card with its header inside -->
           <Grid.RowDefinitions>
-            <RowDefinition Height="26"/>
-            <RowDefinition Height="40"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="26"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="26"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="26"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="56"/>
-            <RowDefinition Height="26"/>
-            <RowDefinition Height="118"/>
+            <RowDefinition Height="136"/>
           </Grid.RowDefinitions>
 
           <!-- INSTALLER -->
-          <TextBlock Grid.Row="0"
-              Style="{StaticResource SectionHeader}"
-              Text="INSTALLER"/>
-          <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="100"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Content="File"/>
-            <TextBox Grid.Column="1"
-                Name="txt_FilePath"
-                Padding="8,0,36,0"
-                ToolTip="Path to the installer. Drag and drop a file anywhere on this window, paste a path, or Browse."/>
-            <!-- Sits inside the right end of the file box; the box's right padding keeps the path from running under it -->
-            <Button Grid.Column="1"
-                Name="btn_Reset"
-                Style="{StaticResource SmallIconButton}"
-                HorizontalAlignment="Right"
-                Margin="0,0,8,0"
-                Content="&#xE894;"
-                ToolTip="Reset - clear the file, options and result (Ctrl+R)"/>
-            <Button Grid.Column="2"
-                Name="btn_Browse"
-                ToolTip="Browse for an installer (Ctrl+O)"
-                Content="Browse"/>
-          </Grid>
-          <TextBlock Grid.Row="2"
-              Name="txtblk_FileInfo"
-              Margin="108,2,8,6"
-              FontSize="12"
-              TextWrapping="Wrap"
-              Foreground="{StaticResource TextMuted}"/>
-
-          <!-- OPTIONS -->
-          <TextBlock Grid.Row="3"
-              Style="{StaticResource SectionHeader}"
-              Text="OPTIONS"/>
-          <Grid Grid.Row="4"
-              Name="panel_MsiOptions"
-              Height="40"
-              Visibility="Collapsed">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="200"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Content="Action"/>
-            <ComboBox Grid.Column="1"
-                Name="cmb_MsiAction">
-              <ComboBoxItem Content="Install (/i)"
-                  Tag="/i"
-                  IsSelected="True"/>
-              <ComboBoxItem Content="Uninstall (/x)"
-                  Tag="/x"/>
-              <ComboBoxItem Content="Repair (/fvomus)"
-                  Tag="/fvomus"/>
-            </ComboBox>
-            <Label Grid.Column="2"
-                Content="UI"/>
-            <ComboBox Grid.Column="3"
-                Name="cmb_MsiUI">
-              <ComboBoxItem Content="Silent (/qn)"
-                  Tag="/qn"
-                  IsSelected="True"/>
-              <ComboBoxItem Content="Basic UI (/qb)"
-                  Tag="/qb"/>
-              <ComboBoxItem Content="Basic UI, no cancel (/qb!)"
-                  Tag="/qb!"/>
-              <ComboBoxItem Content="Passive (/passive)"
-                  Tag="/passive"/>
-              <ComboBoxItem Content="Full UI"
-                  Tag=""/>
-            </ComboBox>
-          </Grid>
-          <Grid Grid.Row="5"
-              Name="panel_MsiLog"
-              Height="40"
-              Visibility="Collapsed">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Content="Log"/>
-            <CheckBox Grid.Column="1"
-                Name="chk_Log"
-                Content="/l*v"
-                IsChecked="True"/>
-            <TextBox Grid.Column="2"
-                Name="txt_LogPath"
-                ToolTip="Verbose log path. Defaults to the installer name plus the action, in the installer's folder (e.g. Setup.msi.Install.log)."/>
-          </Grid>
-          <Grid Grid.Row="6">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="100"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Label Grid.Column="0"
-                Name="lbl_Arguments"
-                Padding="0,0,8,0"
-                Content="ArgumentList"/>
-            <!-- Wraps and grows to about three lines for long property lists, then scrolls. Enter still doesn't add a line break -->
-            <TextBox Grid.Column="1"
-                Name="txt_Arguments"
-                TextWrapping="Wrap"
-                AcceptsReturn="False"
-                MinHeight="35"
-                MaxHeight="76"
-                Padding="8,3"
-                VerticalScrollBarVisibility="Auto"
-                ToolTip="Arguments for the installer. For MSI files, add properties here (e.g. ALLUSERS=1 TRANSFORMS=&quot;app.mst&quot;)."/>
-          </Grid>
+          <Border Grid.Row="0"
+              Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource CardHeader}"
+                  Text="INSTALLER"/>
+              <Grid Height="40">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="100"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Content="File"/>
+                <TextBox Grid.Column="1"
+                    Name="txt_FilePath"
+                    Padding="8,0,36,0"
+                    ToolTip="Path to the installer. Drag and drop a file anywhere on this window, paste a path, or Browse."/>
+                <!-- Sits inside the right end of the file box; the box's right padding keeps the path from running under it -->
+                <Button Grid.Column="1"
+                    Name="btn_Reset"
+                    Style="{StaticResource SmallIconButton}"
+                    HorizontalAlignment="Right"
+                    Margin="0,0,8,0"
+                    Content="&#xE894;"
+                    ToolTip="Reset - clear the file, options and result (Ctrl+R)"/>
+                <Button Grid.Column="2"
+                    Name="btn_Browse"
+                    ToolTip="Browse for an installer (Ctrl+O)"
+                    Content="Browse"/>
+              </Grid>
+              <TextBlock Name="txtblk_FileInfo"
+                  Margin="108,0,8,4"
+                  FontSize="12"
+                  TextWrapping="Wrap"
+                  Foreground="{StaticResource TextMuted}"/>
+              <!-- Options share the installer card: a thin divider instead of a separate card saves height for the command line -->
+              <Border Height="1"
+                  Margin="6,2,6,4"
+                  Background="{StaticResource Border}"/>
+              <Grid Name="panel_MsiOptions"
+                  Height="40"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="200"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Content="Action"/>
+                <ComboBox Grid.Column="1"
+                    Name="cmb_MsiAction">
+                  <ComboBoxItem Content="Install (/i)"
+                      Tag="/i"
+                      IsSelected="True"/>
+                  <ComboBoxItem Content="Uninstall (/x)"
+                      Tag="/x"/>
+                  <ComboBoxItem Content="Repair (/fvomus)"
+                      Tag="/fvomus"/>
+                </ComboBox>
+                <Label Grid.Column="2"
+                    Content="UI"/>
+                <ComboBox Grid.Column="3"
+                    Name="cmb_MsiUI">
+                  <ComboBoxItem Content="Silent (/qn)"
+                      Tag="/qn"
+                      IsSelected="True"/>
+                  <ComboBoxItem Content="Basic UI (/qb)"
+                      Tag="/qb"/>
+                  <ComboBoxItem Content="Basic UI, no cancel (/qb!)"
+                      Tag="/qb!"/>
+                  <ComboBoxItem Content="Passive (/passive)"
+                      Tag="/passive"/>
+                  <ComboBoxItem Content="Full UI"
+                      Tag=""/>
+                </ComboBox>
+              </Grid>
+              <Grid Name="panel_MsiLog"
+                  Height="40"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Content="Log"/>
+                <CheckBox Grid.Column="1"
+                    Name="chk_Log"
+                    Content="/l*v"
+                    IsChecked="True"/>
+                <TextBox Grid.Column="2"
+                    Name="txt_LogPath"
+                    ToolTip="Verbose log path. Defaults to the installer name plus the action, in the installer's folder (e.g. Setup.msi.Install.log)."/>
+              </Grid>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Label Grid.Column="0"
+                    Name="lbl_Arguments"
+                    Padding="0,0,8,0"
+                    Content="ArgumentList"/>
+                <!-- Wraps and grows to about three lines for long property lists, then scrolls. Enter still doesn't add a line break -->
+                <TextBox Grid.Column="1"
+                    Name="txt_Arguments"
+                    TextWrapping="Wrap"
+                    AcceptsReturn="False"
+                    MinHeight="35"
+                    MaxHeight="76"
+                    Padding="8,3"
+                    VerticalScrollBarVisibility="Auto"
+                    ToolTip="Arguments for the installer. For MSI files, add properties here (e.g. ALLUSERS=1 TRANSFORMS=&quot;app.mst&quot;)."/>
+              </Grid>
+            </StackPanel>
+          </Border>
 
           <!-- RUN AS -->
-          <TextBlock Grid.Row="7"
-              Style="{StaticResource SectionHeader}"
-              Text="RUN AS"/>
-          <StackPanel Grid.Row="8"
-              Margin="100,0,0,4">
-            <RadioButton Name="rad_Session0"
-                GroupName="RunMode"
-                IsChecked="True">
-              <TextBlock>
-                <Run Text="Session 0"
-                    FontWeight="SemiBold"/>
-                <Run Text=" - SYSTEM, hidden, no desktop. The same as ConfigMgr and Intune."
-                    Foreground="{StaticResource TextMuted}"/>
-              </TextBlock>
-            </RadioButton>
-            <RadioButton Name="rad_PsExec"
-                GroupName="RunMode">
-              <TextBlock>
-                <Run Text="Interactive (PsExec)"
-                    FontWeight="SemiBold"/>
-                <Run Text=" - SYSTEM, installer UI is visible on your desktop."
-                    Foreground="{StaticResource TextMuted}"/>
-              </TextBlock>
-            </RadioButton>
-            <RadioButton Name="rad_CurrentUser"
-                GroupName="RunMode">
-              <TextBlock>
-                <Run Text="Current user"
-                    FontWeight="SemiBold"/>
-                <!-- Filled in on load with the account and its elevation -->
-                <Run Name="txtblk_CurrentUserDetail"
-                    Foreground="{StaticResource TextMuted}"/>
-              </TextBlock>
-            </RadioButton>
-          </StackPanel>
+          <Border Grid.Row="1"
+              Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource CardHeader}"
+                  Text="RUN AS"/>
+              <StackPanel Margin="96,0,0,2">
+                <RadioButton Name="rad_Session0"
+                    GroupName="RunMode"
+                    IsChecked="True">
+                  <TextBlock>
+                    <Run Text="Session 0"
+                        FontWeight="SemiBold"/>
+                    <Run Text=" - SYSTEM, hidden, no desktop. The same as ConfigMgr and Intune."
+                        Foreground="{StaticResource TextMuted}"/>
+                  </TextBlock>
+                </RadioButton>
+                <RadioButton Name="rad_PsExec"
+                    GroupName="RunMode">
+                  <TextBlock>
+                    <Run Text="Interactive (PsExec)"
+                        FontWeight="SemiBold"/>
+                    <Run Text=" - SYSTEM, installer UI is visible on your desktop."
+                        Foreground="{StaticResource TextMuted}"/>
+                  </TextBlock>
+                </RadioButton>
+                <RadioButton Name="rad_CurrentUser"
+                    GroupName="RunMode">
+                  <TextBlock>
+                    <Run Text="Current user"
+                        FontWeight="SemiBold"/>
+                    <!-- Filled in on load with the account and its elevation -->
+                    <Run Name="txtblk_CurrentUserDetail"
+                        Foreground="{StaticResource TextMuted}"/>
+                  </TextBlock>
+                </RadioButton>
+              </StackPanel>
+            </StackPanel>
+          </Border>
 
           <!-- COMMAND LINE -->
-          <TextBlock Grid.Row="9"
-              Style="{StaticResource SectionHeader}"
-              Text="COMMAND LINE"/>
-          <Grid Grid.Row="10">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="60"/>
-            </Grid.ColumnDefinitions>
-            <TextBox Grid.Column="0"
-                Name="txt_CommandLine"
-                IsReadOnly="True"
-                TextWrapping="Wrap"
-                MinHeight="56"
-                Padding="8,6"
-                VerticalContentAlignment="Top"
-                VerticalScrollBarVisibility="Auto"
-                FontFamily="Consolas"
-                FontSize="13"/>
-            <Button Grid.Column="1"
-                Name="btn_CommandLine_Copy"
-                Style="{StaticResource CopyButton}"
-                ToolTip="Copy the command line"
-                Content="&#xE8C8;"/>
-          </Grid>
+          <Border Grid.Row="2"
+              Style="{StaticResource Card}">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top"
+                  Style="{StaticResource CardHeader}"
+                  Text="COMMAND LINE"/>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="60"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0"
+                    Name="txt_CommandLine"
+                    IsReadOnly="True"
+                    TextWrapping="Wrap"
+                    MinHeight="56"
+                    Padding="8,6"
+                    VerticalContentAlignment="Top"
+                    VerticalScrollBarVisibility="Auto"
+                    FontFamily="Consolas"
+                    FontSize="13"/>
+                <Button Grid.Column="1"
+                    Name="btn_CommandLine_Copy"
+                    Style="{StaticResource CopyButton}"
+                    ToolTip="Copy the command line"
+                    Content="&#xE8C8;"/>
+              </Grid>
+            </DockPanel>
+          </Border>
           <!-- Stop is a separate button rather than Run changing into Stop, so double-clicking Run can't stop the process -->
-          <Grid Grid.Row="11"
+          <Grid Grid.Row="3"
               Margin="0,5.5,0,0">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
@@ -2775,66 +2824,64 @@ Add-Type -AssemblyName WindowsBase
           </Grid>
 
           <!-- RESULT -->
-          <TextBlock Grid.Row="12"
-              Style="{StaticResource SectionHeader}"
-              Text="RESULT"/>
-          <Border Grid.Row="13"
-              Margin="2.5"
-              CornerRadius="8"
-              BorderBrush="{StaticResource Border}"
-              BorderThickness="1"
-              Background="{StaticResource Surface}">
-            <Grid Margin="14,8">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"
-                    MinWidth="110"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="120"/>
-              </Grid.ColumnDefinitions>
-              <StackPanel Grid.Column="0"
-                  VerticalAlignment="Center">
-                <TextBlock Text="EXIT CODE"
-                    FontSize="10"
-                    FontWeight="SemiBold"
-                    Foreground="{StaticResource TextMuted}"/>
-                <TextBlock Name="txtblk_ExitCode"
-                    Text="--"
-                    FontSize="34"
-                    FontWeight="Bold"
-                    Foreground="{StaticResource Text}"/>
-                <!-- Hex as well: EXE installers often document their codes in hex, and HRESULTs are easier to look up that way -->
-                <TextBlock Name="txtblk_ExitCodeHex"
-                    FontFamily="Consolas"
-                    FontSize="12"
-                    Margin="0,-4,0,0"
-                    Foreground="{StaticResource TextMuted}"/>
-              </StackPanel>
-              <StackPanel Grid.Column="1"
-                  VerticalAlignment="Center"
-                  Margin="16,0,8,0">
-                <TextBlock Name="txtblk_ExitMeaning"
-                    Text="Not run yet"
-                    FontWeight="SemiBold"
-                    TextWrapping="Wrap"
-                    Foreground="{StaticResource Text}"/>
-                <TextBlock Name="txtblk_RunDetails"
-                    FontSize="12"
-                    TextWrapping="Wrap"
-                    Margin="0,4,0,0"
-                    Foreground="{StaticResource TextMuted}"/>
-              </StackPanel>
-              <StackPanel Grid.Column="2"
-                  VerticalAlignment="Center">
-                <Button Name="btn_OpenLog"
-                    Content="Open Log"
-                    Height="34"
-                    IsEnabled="False"/>
-                <Button Name="btn_OpenFolder"
-                    Content="Open Folder"
-                    Height="34"
-                    IsEnabled="False"/>
-              </StackPanel>
-            </Grid>
+          <Border Grid.Row="4"
+              Style="{StaticResource Card}">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top"
+                  Style="{StaticResource CardHeader}"
+                  Text="RESULT"/>
+              <Grid Margin="10,0,10,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"
+                      MinWidth="110"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="120"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0"
+                    VerticalAlignment="Center">
+                  <TextBlock Text="EXIT CODE"
+                      FontSize="10"
+                      FontWeight="SemiBold"
+                      Foreground="{StaticResource TextMuted}"/>
+                  <TextBlock Name="txtblk_ExitCode"
+                      Text="--"
+                      FontSize="34"
+                      FontWeight="Bold"
+                      Foreground="{StaticResource Text}"/>
+                  <!-- Hex as well: EXE installers often document their codes in hex, and HRESULTs are easier to look up that way -->
+                  <TextBlock Name="txtblk_ExitCodeHex"
+                      FontFamily="Consolas"
+                      FontSize="12"
+                      Margin="0,-4,0,0"
+                      Foreground="{StaticResource TextMuted}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                    VerticalAlignment="Center"
+                    Margin="16,0,8,0">
+                  <TextBlock Name="txtblk_ExitMeaning"
+                      Text="Not run yet"
+                      FontWeight="SemiBold"
+                      TextWrapping="Wrap"
+                      Foreground="{StaticResource Text}"/>
+                  <TextBlock Name="txtblk_RunDetails"
+                      FontSize="12"
+                      TextWrapping="Wrap"
+                      Margin="0,4,0,0"
+                      Foreground="{StaticResource TextMuted}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2"
+                    VerticalAlignment="Center">
+                  <Button Name="btn_OpenLog"
+                      Content="Open Log"
+                      Height="34"
+                      IsEnabled="False"/>
+                  <Button Name="btn_OpenFolder"
+                      Content="Open Folder"
+                      Height="34"
+                      IsEnabled="False"/>
+                </StackPanel>
+              </Grid>
+            </DockPanel>
           </Border>
         </Grid>
 
@@ -2852,16 +2899,22 @@ Add-Type -AssemblyName WindowsBase
         <!-- Right: History -->
         <Grid Grid.Column="2">
           <Grid.RowDefinitions>
-            <RowDefinition Height="26"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="40"/>
           </Grid.RowDefinitions>
-          <TextBlock Grid.Row="0"
-              Style="{StaticResource SectionHeader}"
-              Text="HISTORY"/>
-          <ListBox Grid.Row="1"
-              Name="lsbox_History"/>
-          <UniformGrid Grid.Row="2"
+          <Border Grid.Row="0"
+              Style="{StaticResource Card}">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top"
+                  Style="{StaticResource CardHeader}"
+                  Text="HISTORY"/>
+              <!-- A dark panel like the inputs; the card is the frame, so the list drops its own border -->
+              <ListBox Name="lsbox_History"
+                  Margin="0"
+                  BorderThickness="0"/>
+            </DockPanel>
+          </Border>
+          <UniformGrid Grid.Row="1"
               Columns="3">
             <Button Name="btn_HistoryLoad"
                 Content="Load"

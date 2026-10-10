@@ -43,7 +43,8 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
 ## Conventions
 
 - Control name prefixes: `txt_`, `btn_`, `cmb_`, `chk_`, `rad_`, `lbl_`, `txtblk_`, `lsbox_`, `panel_`, `MenuItem_`.
-- Use only the colour tokens in `Window.Resources`: `Bg`, `Surface`, `Surface2`, `Border`, `BorderMuted`, `Text`, `TextMuted`, `Accent`, `AccentHover`, `AccentText`, `Danger`, `Success`. In code, get brushes with `$formRunAsSystem.FindResource('Name')` and never hard-code colours.
+- **Layers:** `Window` (the window background, a dark stone with a hint of the site's orange) sits behind the section cards. Cards are `Bg`, inputs and the History list are `Surface`, and buttons are `Surface2`, so neighbouring layers never share a shade. Each section is a `Border` with `Style="{StaticResource Card}"` and its header inside, using `CardHeader`. The palette comes from michaeltheadmin.com (the Blowfish theme's stone and orange scales).
+- Use only the colour tokens in `Window.Resources`: `Window`, `Bg`, `Surface`, `Surface2`, `Border`, `BorderMuted`, `Text`, `TextMuted`, `Accent`, `AccentHover`, `AccentText`, `Danger`, `Success`. In code, get brushes with `$formRunAsSystem.FindResource('Name')` and never hard-code colours.
 - Log what the app does to the console with `Write-Host "Action: [$value]"`, matching the sibling tools.
 - Comment the *why*, not the *what*.
 - `ConvertFrom-Json` in 5.1 returns a JSON array as a single object, so unroll it with `| ForEach-Object { $_ }`.
