@@ -100,7 +100,7 @@ Arguments can contain passwords or license keys, so the arguments and command li
 Windows normally blocks drag and drop from Explorer into an elevated window, which is why GetMSIInformation asks you not to run it as administrator. RunAsSystem lets the older `WM_DROPFILES` message through the window's message filter, so drag and drop still works while elevated. You can also paste a path or use **Browse**.
 
 ## Right-Click Context Menu Option
-Install a **Run as SYSTEM...** option for `.msi`, `.msp`, `.exe`, `.ps1`, `.cmd`, `.bat` and `.vbs` files from the **Right Click Menu** menu. The option shows the UAC shield and opens the app with the file already loaded.
+Install a **Run as SYSTEM...** option for `.msi`, `.msp`, `.exe`, `.ps1`, `.cmd`, `.bat` and `.vbs` files from the **Right Click Menu** menu. The option shows the UAC shield and opens the app with the file already loaded. It opens the app in PowerShell 7.4 or later when that's installed, and in Windows PowerShell 5.1 otherwise. If you install PowerShell 7 later, reinstall the menu to switch to it.
 
 - **Install**: copies the script and icon to `%LOCALAPPDATA%\RunAsSystem\ContextMenu` and registers the menu under `HKCU\Software\Classes\SystemFileAssociations`.
 - **Uninstall**: removes the menu and its files. Your run history is kept.
@@ -132,6 +132,6 @@ Clicking **Update Available** installs the update and reopens the app with the s
 If the update can't be installed (you're offline, the file is locked or the download is damaged), the release page opens instead. You can't update while an installer is running.
 
 ## Requirements
-- Windows PowerShell 5.1, or PowerShell 7. When the app relaunches as administrator or after an update, it uses the same PowerShell you started it in.
+- Windows PowerShell 5.1, or PowerShell 7. When the app relaunches as administrator or after an update, it uses the same PowerShell you started it in. The right-click menu uses PowerShell 7.4+ when it's installed.
 - Administrator rights
 - Internet access only for the update check and the optional PsExec download

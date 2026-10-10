@@ -13,7 +13,7 @@ Make it easy to run MSI and EXE installers (and scripts) as SYSTEM to test insta
 | Topic | Decision | Reason |
 | --- | --- | --- |
 | Look and structure | Match [GetMSIInformation](https://github.com/MichaelEscamilla/GetMSIInformation) and [CodeSigningTool](https://github.com/MichaelEscamilla/CodeSigningTool): one `.ps1` file with WPF, the same palette, update check, right-click menu and `iex (irm …)` launch | Keeps the tool family consistent |
-| PowerShell version | Works in Windows PowerShell **5.1** (the baseline) and PowerShell 7, with no step that switches to pwsh when it's installed. The elevation and update relaunches use the PowerShell the script is already running in (`$Script:CurrentPowerShellPath`, from `$PSHOME`), so starting it from pwsh stays in pwsh (2026-10-10). The right-click menu and `.ps1` installers always use 5.1 | Testing often happens on devices that don't have PowerShell 7. GetMSIInformation prefers pwsh 7.4+ wherever it's installed. RunAsSystem only stays in the PowerShell it was given, so 5.1 users are never moved to pwsh and pwsh users are never dropped to 5.1 |
+| PowerShell version | Works in Windows PowerShell **5.1** (the baseline) and PowerShell 7, with no step that switches to pwsh when it's installed. The elevation and update relaunches use the PowerShell the script is already running in (`$Script:CurrentPowerShellPath`, from `$PSHOME`), so starting it from pwsh stays in pwsh (2026-10-10). `.ps1` installers always use 5.1. The right-click menu uses pwsh 7.4+ if it's installed when the menu is installed, otherwise 5.1 (2026-10-10, matching GetMSIInformation) | Testing often happens on devices that don't have PowerShell 7. GetMSIInformation prefers pwsh 7.4+ wherever it's installed. RunAsSystem only stays in the PowerShell it was given, so 5.1 users are never moved to pwsh and pwsh users are never dropped to 5.1 |
 | How it runs as SYSTEM | A one-time Scheduled Task (Session 0) by default, based on the [Patch My PC Connectivity tool](https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity) | Avoids PsExec, and Session 0 is how ConfigMgr and Intune really run installers |
 | Interactive mode | Optional PsExec mode (`-s -i`) | Lets you see the installer's UI. If PsExec isn't found, the tool offers to download it from live.sysinternals.com **into the installer's folder** (the owner's choice) |
 | File types | `.msi`, `.msp`, `.exe`, `.ps1`, `.cmd`, `.bat`, `.vbs` | MSI and EXE are the main use; scripts were requested too |
@@ -79,7 +79,8 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 - [x] PsExec mode with MSI, EXE and PS1 files.
 - [ ] The PsExec download prompt.
 - [ ] Drag and drop from Explorer into the elevated window.
-- [ ] Right-click menu install and uninstall: the menu shows the UAC shield and opens the app with the file loaded.
+- [ ] Right-click menu install and uninstall: the menu shows the UAC shield and opens the app with the file loaded. Still to check: the registry command points at powershell.exe on a device without pwsh 7.4+.
+- [x] Right-click menu uses pwsh 7.4+ when it's installed. The owner confirmed it works (2026-10-10).
 - [ ] The relaunch-as-admin step, both when the script is run from a file and when it's launched with `iex`.
 - [x] Current user mode elevated. The owner tested it in the lab on 2026-10-09 and it works. It was also tested non-elevated while building: Medium integrity, 3010 returned, task removed.
 - [ ] Current user mode when RunAsSystem is elevated with a different admin account than the one signed in. Does the interactive task start, and as which account?

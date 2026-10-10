@@ -35,6 +35,7 @@
               Open Log can be used while an install is running, as soon as the log file is created, so you can follow the install
               Fixed Open Log and Open Folder opening the previous run's files while a new run was in progress
               Loading a different file now clears the previous run's result, Open Log and Open Folder
+              The right-click menu now opens the tool in PowerShell 7.4+ when it's installed, like GetMSIInformation, and in Windows PowerShell 5.1 otherwise (reinstall the menu to switch)
 2026.10.9.1   - Credit Ben Whitmore and his Patch My PC Connectivity tool, which inspired RunAsSystem, in the README and the script help
 2026.10.9.0   - Arguments and command lines saved in history are now encrypted with DPAPI, so only your Windows account on that device can read them
               History entries show their arguments, with Load and Copy buttons when you hover over an entry
@@ -131,7 +132,7 @@ $Script:currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Secur
 # The account running this script, used by Current user mode
 $Script:CurrentUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $Script:CurrentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-# Windows PowerShell 5.1 path (used for the right-click menu, since it's on every device)
+# Windows PowerShell 5.1 path (on every device: the fallback for relaunches and the right-click menu, and used for .ps1 installers)
 $Script:WindowsPowerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 # The PowerShell running this script, so relaunches stay in it (pwsh stays pwsh, 5.1 stays 5.1).
 # $PSHOME rather than the process path, which is Code.exe or powershell_ise.exe when run from an editor.
@@ -1675,8 +1676,15 @@ function Install-RightClickMenu {
     }
   }
 
-  # Always Windows PowerShell 5.1 - it's on every device
-  $Command = "`"$($Script:WindowsPowerShellPath)`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$ScriptPath`" -FilePath `"%1`""
+  # Prefer pwsh 7.4+ when installed (like GetMSIInformation), otherwise Windows PowerShell 5.1, which is on every device.
+  # Looked up here rather than at startup, so it reflects what's installed when the menu is (re)installed.
+  $MenuPowerShellPath = $Script:WindowsPowerShellPath
+  $Pwsh = Get-Command -Name pwsh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($Pwsh -and $Pwsh.Version -ge [Version]'7.4') {
+    $MenuPowerShellPath = $Pwsh.Path
+  }
+  Write-Host "Menu PowerShell:    [$MenuPowerShellPath]"
+  $Command = "`"$MenuPowerShellPath`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$ScriptPath`" -FilePath `"%1`""
 
   foreach ($Extension in $Script:SupportedExtensions) {
     $KeyPath = "HKCU:\Software\Classes\SystemFileAssociations\$Extension\shell\$($Script:RightClickMenuKeyName)"
