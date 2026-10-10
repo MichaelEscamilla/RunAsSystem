@@ -13,13 +13,19 @@ iex (irm runassystem.michaeltheadmin.com)
 
 The app needs administrator rights. If it isn't started elevated, it relaunches itself and shows a UAC prompt.
 
+## Credits
+- **[Ben Whitmore](https://github.com/byteben)** and **[Patch My PC](https://patchmypc.com)**: Ben's [Patch My PC Connectivity tool](https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity) inspired RunAsSystem. It showed that an installer can run as SYSTEM in Session 0 through a one-time Scheduled Task, without PsExec. Session 0 mode is based on that approach. RunAsSystem adds a GUI, exit code descriptions, run history and a right-click menu.
+- [PsExec](https://learn.microsoft.com/sysinternals/downloads/psexec) by Sysinternals, for Interactive mode.
+
+Thanks to Ben and the Patch My PC team for sharing their work.
+
 ## Run Modes
 ### Session 0 (default)
 The installer runs as SYSTEM in **session 0**, which has no desktop. This is how the ConfigMgr client and the Intune Management Extension run installers, so it's the most accurate test. Problems this mode catches:
 - Installers that stop at a prompt or dialog nobody can see. In ConfigMgr and Intune these hang until they time out.
 - Installers that depend on the logged-on user's profile, environment variables or mapped drives.
 
-No PsExec is needed. A one-time Scheduled Task, similar to the approach used by the [Patch My PC Connectivity tool](https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity), runs the installer directly:
+No PsExec is needed. A one-time Scheduled Task, based on the approach [Ben Whitmore](https://github.com/byteben) used in the [Patch My PC Connectivity tool](https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity), runs the installer directly:
 - The task is registered in the root of the Task Scheduler Library as `RunAsSystem_<timestamp>`.
 - It runs as `S-1-5-18` with highest privileges at normal priority. Scheduled tasks default to below-normal priority, which would make installs run slower than they do in ConfigMgr or Intune.
 - It has no active trigger, so it only runs when the tool starts it. It has no time limit, and its working directory is the installer's own folder.
@@ -118,7 +124,3 @@ Install a **Run as SYSTEM...** option for `.msi`, `.msp`, `.exe`, `.ps1`, `.cmd`
 - Windows PowerShell 5.1 (it also runs in PowerShell 7, but doesn't need it)
 - Administrator rights
 - Internet access only for the update check and the optional PsExec download
-
-## Credit
-- SYSTEM execution through a one-time Scheduled Task, based on the [Patch My PC Connectivity tool](https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity).
-- [PsExec](https://learn.microsoft.com/sysinternals/downloads/psexec) by Sysinternals, for Interactive mode.

@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 2026.10.9.0
+.VERSION 2026.10.9.1
 
 .GUID 8f2d6c1e-4b7a-4e3f-9a5d-2c8b1e7f6a40
 
@@ -25,6 +25,7 @@
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
+2026.10.9.1   - Credit Ben Whitmore and his Patch My PC Connectivity tool, which inspired RunAsSystem, in the README and the script help
 2026.10.9.0   - Arguments and command lines saved in history are now encrypted with DPAPI, so only your Windows account on that device can read them
               History entries show their arguments, with Load and Copy buttons when you hover over an entry
               New Current user run mode: runs the installer as the account running the tool, through a scheduled task
@@ -67,6 +68,13 @@ Optional arguments to pre-fill in the Arguments box.
 .NOTES
 Requires administrator rights. The script relaunches itself elevated when needed.
 Written for Windows PowerShell 5.1 so it can be used on devices where PowerShell 7 isn't installed.
+
+Credits:
+  - Ben Whitmore (https://github.com/byteben) and Patch My PC: Ben's Patch My PC Connectivity tool inspired
+    RunAsSystem, and Session 0 mode is based on its one-time Scheduled Task approach.
+    https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity
+  - PsExec by Sysinternals, for Interactive mode.
+    https://learn.microsoft.com/sysinternals/downloads/psexec
 #>
 
 param (
@@ -82,7 +90,7 @@ param (
 # Script Name
 $Script:ScriptName = "RunAsSystem.ps1"
 # Script Version
-[System.Version]$Script:ScriptVersion = "2026.10.9.0"
+[System.Version]$Script:ScriptVersion = "2026.10.9.1"
 # App Data folder (history and right-click menu files)
 $Script:AppDataPath = "$env:LOCALAPPDATA\RunAsSystem"
 $Script:HistoryPath = "$Script:AppDataPath\History.json"
@@ -616,7 +624,7 @@ function Connect-TaskService {
 }
 
 function Register-SystemTask {
-  # Approach based on the Patch My PC Connectivity tool:
+  # Approach based on Ben Whitmore's Patch My PC Connectivity tool:
   # https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity
   param (
     [Parameter(Mandatory = $true)]
