@@ -36,6 +36,8 @@
               Fixed Open Log and Open Folder opening the previous run's files while a new run was in progress
               Loading a different file now clears the previous run's result, Open Log and Open Folder
               The right-click menu now opens the tool in PowerShell 7.4+ when it's installed, like GetMSIInformation, and in Windows PowerShell 5.1 otherwise (reinstall the menu to switch)
+              Click the exit code, or its hex value, in the result to copy it for looking up
+              Status bar messages now clear after a few seconds, like CodeSigningTool, except ones that ask you to do something
 2026.10.9.1   - Credit Ben Whitmore and his Patch My PC Connectivity tool, which inspired RunAsSystem, in the README and the script help
 2026.10.9.0   - Arguments and command lines saved in history are now encrypted with DPAPI, so only your Windows account on that device can read them
               History entries show their arguments, with Load and Copy buttons when you hover over an entry
@@ -290,12 +292,39 @@ function Set-StatusBar {
     [Parameter(Mandatory = $true)]
     [string]$Text,
     [Parameter(Mandatory = $false)]
-    [switch]$Warning
+    [switch]$Warning,
+    # Keep the message until the next one (or Reset), for messages that ask you to do something
+    [Parameter(Mandatory = $false)]
+    [switch]$Persist
   )
 
   # Every message sets the colour, so a warning doesn't stay red after the next normal message
   $txtblk_StatusBar.Text = $Text
   $txtblk_StatusBar.Foreground = if ($Warning) { $formRunAsSystem.FindResource('Danger') } else { $formRunAsSystem.FindResource('TextMuted') }
+
+  # Messages show for a few seconds and then the default text comes back, like CodeSigningTool.
+  # One timer is reused, so a new message restarts the countdown instead of stacking reverts.
+  if (-not $Script:StatusTimer) {
+    $Script:StatusTimer = New-Object System.Windows.Threading.DispatcherTimer
+    # The restore state rides on the timer's Tag, since $Script: variables aren't reliably visible in the Tick callback
+    $Script:StatusTimer.Add_Tick({
+        param($Timer, $e)
+        $Timer.Stop()
+        $Restore = $Timer.Tag
+        $Restore.Bar.Text = $Restore.Text
+        $Restore.Bar.Foreground = $Restore.Brush
+      })
+  }
+  $Script:StatusTimer.Stop()
+  if ($Persist -or $Text -eq $Script:DefaultStatusBarText) { return }
+
+  $Script:StatusTimer.Interval = [TimeSpan]::FromSeconds(4)
+  $Script:StatusTimer.Tag = [PSCustomObject]@{
+    Bar   = $txtblk_StatusBar
+    Text  = $Script:DefaultStatusBarText
+    Brush = $formRunAsSystem.FindResource('TextMuted')
+  }
+  $Script:StatusTimer.Start()
 }
 
 function Get-FormState {
@@ -839,6 +868,27 @@ function Set-ResultDisplay {
   $txtblk_ExitCodeHex.Text = $HexText
   $txtblk_ExitMeaning.Text = $Meaning
   $txtblk_RunDetails.Text = $Details
+
+  # Only a real exit code is worth copying, so placeholders like '--', 'Stopped' or 'Error' don't look clickable
+  $IsCode = $ExitCodeText -match '^-?\d+$'
+  foreach ($TextBlock in $txtblk_ExitCode, $txtblk_ExitCodeHex) {
+    $TextBlock.Cursor = if ($IsCode) { [System.Windows.Input.Cursors]::Hand } else { $null }
+    $TextBlock.ToolTip = if ($IsCode) { 'Click to copy' } else { $null }
+  }
+}
+
+function Copy-ExitCode {
+  param (
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyString()]
+    [string]$Text
+  )
+
+  # Copied on its own so it can be pasted straight into a search or a vendor's exit code table
+  if ($txtblk_ExitCode.Text -notmatch '^-?\d+$' -or -not $Text) { return }
+  [System.Windows.Clipboard]::SetText($Text)
+  Write-Host "Copied to Clipboard: [$Text]"
+  Set-StatusBar -Text "Exit code $Text copied to the clipboard"
 }
 
 function Start-SystemRun {
@@ -1344,7 +1394,7 @@ function Import-HistoryEntry {
 
   Set-FormState -State $Entry
   if ($Entry.ArgumentsUnreadable) {
-    Set-StatusBar -Warning -Text "Loaded run from $($Entry.Timestamp) WITHOUT its arguments - they were saved on another account or device and can't be decrypted here. Re-enter them before running."
+    Set-StatusBar -Warning -Persist -Text "Loaded run from $($Entry.Timestamp) WITHOUT its arguments - they were saved on another account or device and can't be decrypted here. Re-enter them before running."
   }
   else {
     Set-StatusBar -Text "Loaded run from $($Entry.Timestamp)"
@@ -3003,13 +3053,16 @@ Add-Type -AssemblyName WindowsBase
                       FontSize="10"
                       FontWeight="SemiBold"
                       Foreground="{StaticResource TextMuted}"/>
+                  <!-- Left-aligned so only the code itself is the click-to-copy target, not the empty space beside it -->
                   <TextBlock Name="txtblk_ExitCode"
+                      HorizontalAlignment="Left"
                       Text="--"
                       FontSize="34"
                       FontWeight="Bold"
                       Foreground="{StaticResource Text}"/>
                   <!-- Hex as well: EXE installers often document their codes in hex, and HRESULTs are easier to look up that way -->
                   <TextBlock Name="txtblk_ExitCodeHex"
+                      HorizontalAlignment="Left"
                       FontFamily="Consolas"
                       FontSize="12"
                       Margin="0,-4,0,0"
@@ -3102,7 +3155,7 @@ $readerformRunAsSystem = New-Object System.Xml.XmlNodeReader $XAMLformRunAsSyste
 # Create Variables for all the controls in the XAML form
 $XAMLformRunAsSystem.SelectNodes("//*[@Name]") | ForEach-Object { Set-Variable -Name ($_.Name) -Value $formRunAsSystem.FindName($_.Name) -Scope Script }
 
-# The status bar text the window opens with, so Reset can put it back
+# The status bar text the window opens with, so Reset and the status message timer can put it back
 $Script:DefaultStatusBarText = $txtblk_StatusBar.Text
 
 # Timer that watches a run in progress
@@ -3236,6 +3289,10 @@ $btn_CommandLine_Copy.Add_Click({
       Set-StatusBar -Text "Command line copied to the clipboard"
     }
   })
+
+#### Result ####
+$txtblk_ExitCode.Add_MouseLeftButtonUp({ Copy-ExitCode -Text $txtblk_ExitCode.Text })
+$txtblk_ExitCodeHex.Add_MouseLeftButtonUp({ Copy-ExitCode -Text $txtblk_ExitCodeHex.Text })
 
 #### Run ####
 $btn_Run.Add_Click({ Start-SystemRun })
