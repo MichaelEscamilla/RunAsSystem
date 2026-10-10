@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 2026.10.9.1
+.VERSION 2026.10.10.0
 
 .GUID 8f2d6c1e-4b7a-4e3f-9a5d-2c8b1e7f6a40
 
@@ -8,15 +8,15 @@
 
 .COMPANYNAME
 
-.COPYRIGHT
+.COPYRIGHT (c) 2026 Michael Escamilla
 
 .TAGS
 
-.LICENSEURI
+.LICENSEURI https://github.com/MichaelEscamilla/RunAsSystem/blob/main/LICENSE
 
 .PROJECTURI https://github.com/MichaelEscamilla/RunAsSystem
 
-.ICONURI
+.ICONURI https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/Images/RunAsSystem.png
 
 .EXTERNALMODULEDEPENDENCIES
 
@@ -25,6 +25,19 @@
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
+2026.10.10.0  - Clicking Update Available now installs the update and reopens the tool with the same file loaded, like GetMSIInformation
+              A downloaded or right-click menu copy of the script is replaced with the new version, and a PowerShell Gallery install is updated with Update-Script
+              If the update can't be installed (offline, the file is locked or the download is damaged), the release page opens instead
+              Launched with iex (irm ...), it still opens the release page, since the next launch is already the latest
+              Updating is blocked while an installer is running, so the run's exit code isn't lost
+              Relaunching as administrator, or after an update, now uses the PowerShell the tool was started in, so starting from pwsh no longer drops to Windows PowerShell 5.1
+              The window opens faster: the update check now runs after the window has appeared
+              Open Log can be used while an install is running, as soon as the log file is created, so you can follow the install
+              Fixed Open Log and Open Folder opening the previous run's files while a new run was in progress
+              Loading a different file now clears the previous run's result, Open Log and Open Folder
+              The right-click menu now opens the tool in PowerShell 7.4+ when it's installed, like GetMSIInformation, and in Windows PowerShell 5.1 otherwise (reinstall the menu to switch)
+              Click the exit code, or its hex value, in the result to copy it for looking up
+              Status bar messages now clear after a few seconds, like CodeSigningTool, except ones that ask you to do something
 2026.10.9.1   - Credit Ben Whitmore and his Patch My PC Connectivity tool, which inspired RunAsSystem, in the README and the script help
 2026.10.9.0   - Arguments and command lines saved in history are now encrypted with DPAPI, so only your Windows account on that device can read them
               History entries show their arguments, with Load and Copy buttons when you hover over an entry
@@ -90,7 +103,7 @@ param (
 # Script Name
 $Script:ScriptName = "RunAsSystem.ps1"
 # Script Version
-[System.Version]$Script:ScriptVersion = "2026.10.9.1"
+[System.Version]$Script:ScriptVersion = "2026.10.10.0"
 # App Data folder (history and right-click menu files)
 $Script:AppDataPath = "$env:LOCALAPPDATA\RunAsSystem"
 $Script:HistoryPath = "$Script:AppDataPath\History.json"
@@ -114,19 +127,27 @@ $Script:UpdateCheckHeaders = @{
   'User-Agent' = 'RunAsSystem-UpdateCheck'
   'Accept'     = 'application/vnd.github+json'
 }
+# How this script was launched (Web, RightClick, PSGallery or LooseFile), which decides how it updates
+$Script:UpdateChannel = $null
 # Get the Security Principal
 $Script:currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 # The account running this script, used by Current user mode
 $Script:CurrentUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $Script:CurrentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-# Windows PowerShell 5.1 path (used for the right-click menu and relaunching)
+# Windows PowerShell 5.1 path (on every device: the fallback for relaunches and the right-click menu, and used for .ps1 installers)
 $Script:WindowsPowerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+# The PowerShell running this script, so relaunches stay in it (pwsh stays pwsh, 5.1 stays 5.1).
+# $PSHOME rather than the process path, which is Code.exe or powershell_ise.exe when run from an editor.
+$Script:CurrentPowerShellPath = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+if (-not (Test-Path -LiteralPath $Script:CurrentPowerShellPath)) { $Script:CurrentPowerShellPath = $Script:WindowsPowerShellPath }
 # Current run state
 $Script:CurrentRun = $null
 # Type of the last file loaded, so the options can be reset when the type changes
 $Script:LastInstallerType = $null
 # The log path last filled in automatically, so a path that was typed in isn't overwritten
 $Script:DefaultLogPath = $null
+# The file of the run the result panel shows, so loading a different file clears that result
+$Script:ResultFilePath = $null
 # michaeltheadmin.com Icon
 $Script:WindowIconBase64 = "AAABAAEAIBwAAAEAIACYDgAAFgAAACgAAAAgAAAAOAAAAAEAIAAAAAAAcA4AAMQOAADEDgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABaSFoNRkZGEUtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEEtLSxBLS0sQS0tLEFRGRhFaSEgNAAAAAAAAAABUVFQLUkxPrFNOUOlRTE7tUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7FFMTuxRTE7sUUxO7VROUOhSTU+qTExMCU5KTH5lYWP/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bm1t/25tbf9ubW3/bmxt/2RfYf9OSkx6TkhLtWtoaf94eHj/dnZ2/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3V1df91dXX/dXV1/3Z2dv94eHj/aWZn/05IS69OSUuxamdo/3h4eP9mZGX/Uk1P/05JS/9OSUv/VVFT/1VRUv9OSUv/T0pM/09KTP9PSkz/T0pM/09KTP9PSkz/T0pM/09KTP9PSkz/T0pM/09KTP9PSkz/TklL/1VRU/9VUVP/TklL/05JS/9STlD/ZmRl/3h4eP9oZWb/T0lMqk9JTLBqZ2j/eHl4/1dUVf90cHH/rqys/62rrP9rZ2j/b2tt/66srP+npaX/p6Wl/6elpf+npaX/p6Wl/6elpf+npaX/p6Wl/6elpf+npaX/p6Wl/6elpf+tq6z/a2do/29rbP+urKz/rays/3Bsbv9YVVb/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/U1BR/5GPkP/09PT/8/Pz/399ff+Hg4X/9PT0/+jo6P/o6Oj/6Ojo/+jo6P/o6Oj/6Ojo/+jo6P/o6Oj/6Ojo/+jo6P/o6Oj/6Ojo//Pz8/9/fX3/hoOE//T09P/z9PP/i4iJ/1VRUv94eXn/aGVm/09JTKpPSUywamdo/3h5eP9VUlP/hIGC/9PS0v/S0dH/dXJz/3t3ef/T0tL/ycjI/8rJyv/Kycr/ycjI/8nIyP/Kycr/ysnK/8nIyP/JyMj/ysnK/8vKyf/Lycj/1NLR/3dzc/98eHj/1dPS/9TT0f9/fHz/V1NU/3h5ef9oZWb/T0lMqk9JTLBqZ2j/eHl4/19cXv9TTU//V1JU/1dSVP9TTlD/VE9R/1dSVP9XUlT/V1NV/1dTVf9XUlT/V1JU/1dTVf9XU1X/V1JU/1dSVP9XU1X/WFNU/1hSVP9ZU1T/VU9Q/1VPUP9ZU1T/WVNU/1JNTv9gXV7/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/V1NV/3x4ef/Hx8j/v76//8HAwf/BwMD/v76//8jHx/9ybnD/dnN0/8jIyP/Ix8f/cm9w/3Vxc//Ix8j/yMfI/4B2cP85VYL/LXrf/y933P8xed7/MXne/y933P8tet7/Q1p//2NaU/94eXn/aGVm/09JTKpPSUywamdo/3h5eP9UUFL/jImK//L09P/n6Oj/5+jo/+fo6P/n6Oj/8/Pz/4B9f/+Gg4T/9PT0//L08/+Afn//hICC//L09P/y9PT/k4h//zRblv8jjf//J4n//yeJ//8nif//J4n//yON//9AYJL/Y1lQ/3h5ef9oZWb/T0lMqk9JTLBqZ2j/eHl4/1hUVv95dHP/v7u3/7izr/+3tLP/tLO0/7GwsP+5t7j/cGxu/3Rwcf+5uLj/ubi4/3Bsbv9ybnD/ubi4/7m4uP98c27/PVV9/y5zzf8xcMr/NHTO/zR0zv8xcMr/LnPN/0RXef9jWlX/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/YFxd/01LUv9ITVz/SE5d/0pJUP9TTU7/XFdZ/1tXWf9VUVL/VlFT/1tXWf9bV1n/VVFT/1ZRU/9cV1n/XFdZ/1VQU/9ZU1L/ZFtY/2RbV/9ZUEz/WlFN/2RbWP9kW1j/VlBQ/19cXv94eXn/aGVm/09JTKpPSUywamdo/3h5eP9jWFH/QF+Q/ymE+f8phPn/OFiJ/4yCe//e3t7/3d3d/3p2eP9/fH3/3t7e/93e3f96d3j/fXl7/93e3v/d3t7/fXp7/4B9fv/f3t7/3t3d/3p2d/9/fH3/397e/97e3f+DgIH/VlJT/3h5ef9oZWb/T0lMqk9JTLBqZ2j/eHl4/2NYT/8+Ypr/JI3//ySN//81WpL/lYuC//Pz8//y8vL/gHx+/4aDhP/z8/P/8vPy/4B9fv+DgIL/8vPz//Lz8/+DgYL/h4SF//Pz8//y8vL/f3x9/4aDhP/z8/P/8vPy/4qIiP9VUVL/eHl5/2hlZv9PSUyqT0lMsGpnaP94eXj/YFhV/0ZTbv87aaj/O2mo/0NRbP9waGX/m5iZ/5uYmf9mYWP/aGRm/5uYmf+bmJn/ZmJj/2djZf+bmJn/m5iZ/2djZf9pZWb/m5iZ/5uYmf9lYWL/amZo/6Cdnv+fnZ7/a2Zo/1lVV/94eXn/aGVm/09JTKpOSUuxamdo/3d4eP9nZmj/XFVT/2BUTP9gVEz/X1hV/1dUVv9QTE7/UExO/1lVV/9ZVVb/UExO/1BMTv9ZVVf/WVVW/1BMTv9QTE7/WVVW/1hVVv9QTE7/UExO/1lVV/9ZVVb/UE1O/1FNTv9WUlT/aWdo/3d4eP9oZWb/TkhLq09JTLNraGn/eHl5/3d3d/93eHj/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4d/93eHf/d3h3/3d4eP93d3f/eHl4/2hmZ/9OSEuuUUpMbWRfYf9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/amhp/2poaf9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9ta2z/bWts/21rbP9samv/Yl1f/1BLS2hRUVECUUtNjFNNT89QS0zTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEpM01BLTdFQS03yUEtN8FBLTdFQSkzTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEpM01BKTNNQSkzTUEtM01NNT89RTE6IfHx8AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFNMT7lTTVCmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU01Qs1JNT7gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTTU1RWFNV/1NOUIhUTE9pVFBSaExMTBYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABRTE9mVlFS11NOUOJWUVLdUEtQNQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP//////////wAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//n////5////+B////wf///////////8="
 
@@ -157,7 +178,7 @@ function Invoke-RelaunchElevated {
   }
 
   try {
-    Start-Process -FilePath $Script:WindowsPowerShellPath -ArgumentList $ArgumentList -Verb RunAs -ErrorAction Stop
+    Start-Process -FilePath $Script:CurrentPowerShellPath -ArgumentList $ArgumentList -Verb RunAs -ErrorAction Stop
   }
   catch {
     Add-Type -AssemblyName PresentationFramework
@@ -271,12 +292,39 @@ function Set-StatusBar {
     [Parameter(Mandatory = $true)]
     [string]$Text,
     [Parameter(Mandatory = $false)]
-    [switch]$Warning
+    [switch]$Warning,
+    # Keep the message until the next one (or Reset), for messages that ask you to do something
+    [Parameter(Mandatory = $false)]
+    [switch]$Persist
   )
 
   # Every message sets the colour, so a warning doesn't stay red after the next normal message
   $txtblk_StatusBar.Text = $Text
   $txtblk_StatusBar.Foreground = if ($Warning) { $formRunAsSystem.FindResource('Danger') } else { $formRunAsSystem.FindResource('TextMuted') }
+
+  # Messages show for a few seconds and then the default text comes back, like CodeSigningTool.
+  # One timer is reused, so a new message restarts the countdown instead of stacking reverts.
+  if (-not $Script:StatusTimer) {
+    $Script:StatusTimer = New-Object System.Windows.Threading.DispatcherTimer
+    # The restore state rides on the timer's Tag, since $Script: variables aren't reliably visible in the Tick callback
+    $Script:StatusTimer.Add_Tick({
+        param($Timer, $e)
+        $Timer.Stop()
+        $Restore = $Timer.Tag
+        $Restore.Bar.Text = $Restore.Text
+        $Restore.Bar.Foreground = $Restore.Brush
+      })
+  }
+  $Script:StatusTimer.Stop()
+  if ($Persist -or $Text -eq $Script:DefaultStatusBarText) { return }
+
+  $Script:StatusTimer.Interval = [TimeSpan]::FromSeconds(4)
+  $Script:StatusTimer.Tag = [PSCustomObject]@{
+    Bar   = $txtblk_StatusBar
+    Text  = $Script:DefaultStatusBarText
+    Brush = $formRunAsSystem.FindResource('TextMuted')
+  }
+  $Script:StatusTimer.Start()
 }
 
 function Get-FormState {
@@ -324,16 +372,22 @@ function Reset-Form {
   $Script:DefaultLogPath = $null
   $txt_LogPath.Text = ''
 
-  Set-ResultDisplay -ExitCodeText '--' -Meaning 'Not run yet'
-  $Script:LastLogPath = $null
-  $Script:LastWorkingDirectory = $null
-  $btn_OpenLog.IsEnabled = $false
-  $btn_OpenFolder.IsEnabled = $false
+  Clear-RunResult
 
   $lsbox_History.SelectedItem = $null
   Set-StatusBar -Text $Script:DefaultStatusBarText
   Write-Host "Form reset"
   $txt_FilePath.Focus() | Out-Null
+}
+
+function Clear-RunResult {
+  # The result, Open Log and Open Folder all belong to the last run, so they're cleared together
+  Set-ResultDisplay -ExitCodeText '--' -Meaning 'Not run yet'
+  $Script:ResultFilePath = $null
+  $Script:LastLogPath = $null
+  $Script:LastWorkingDirectory = $null
+  $btn_OpenLog.IsEnabled = $false
+  $btn_OpenFolder.IsEnabled = $false
 }
 
 function Reset-FormOptions {
@@ -516,6 +570,11 @@ function Update-FileSelection {
 
   # A new file always gets a new default log next to it
   Update-DefaultLogPath -Force
+
+  # The result shown is for the last run's file, so it no longer applies once a different file is loaded
+  if ($Script:ResultFilePath -and -not $Script:CurrentRun -and $Path -ne $Script:ResultFilePath) {
+    Clear-RunResult
+  }
 
   # File information line
   $txtblk_FileInfo.Foreground = $formRunAsSystem.FindResource('TextMuted')
@@ -809,6 +868,27 @@ function Set-ResultDisplay {
   $txtblk_ExitCodeHex.Text = $HexText
   $txtblk_ExitMeaning.Text = $Meaning
   $txtblk_RunDetails.Text = $Details
+
+  # Only a real exit code is worth copying, so placeholders like '--', 'Stopped' or 'Error' don't look clickable
+  $IsCode = $ExitCodeText -match '^-?\d+$'
+  foreach ($TextBlock in $txtblk_ExitCode, $txtblk_ExitCodeHex) {
+    $TextBlock.Cursor = if ($IsCode) { [System.Windows.Input.Cursors]::Hand } else { $null }
+    $TextBlock.ToolTip = if ($IsCode) { 'Click to copy' } else { $null }
+  }
+}
+
+function Copy-ExitCode {
+  param (
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyString()]
+    [string]$Text
+  )
+
+  # Copied on its own so it can be pasted straight into a search or a vendor's exit code table
+  if ($txtblk_ExitCode.Text -notmatch '^-?\d+$' -or -not $Text) { return }
+  [System.Windows.Clipboard]::SetText($Text)
+  Write-Host "Copied to Clipboard: [$Text]"
+  Set-StatusBar -Text "Exit code $Text copied to the clipboard"
 }
 
 function Start-SystemRun {
@@ -847,6 +927,14 @@ function Start-SystemRun {
     Process    = $null
     CommandRun = $txt_CommandLine.Text
   }
+
+  # Point Open Log and Open Folder at this run straight away, so they never open the previous run's files.
+  # Open Log stays disabled until the installer creates the log (Watch-SystemRun), so it can be opened mid-install.
+  $Script:ResultFilePath = $State.FilePath
+  $Script:LastLogPath = $Spec.LogPath
+  $Script:LastWorkingDirectory = $Spec.WorkingDirectory
+  $btn_OpenLog.IsEnabled = $false
+  $btn_OpenFolder.IsEnabled = [bool]$Script:LastWorkingDirectory
 
   Set-RunningState -Running $true
   $ModeText = Get-ModeText -Mode $State.Mode
@@ -896,6 +984,13 @@ function Watch-SystemRun {
 
   $Elapsed = (Get-Date) - $Run.Started
   $btn_Run.Content = "Running...  $($Elapsed.ToString('hh\:mm\:ss'))"
+
+  # Enable Open Log as soon as the log exists. Once it's enabled the check stops, so it's one Test-Path per tick at most
+  if ($Script:LastLogPath -and -not $btn_OpenLog.IsEnabled -and (Test-Path -LiteralPath $Script:LastLogPath -PathType Leaf)) {
+    $btn_OpenLog.IsEnabled = $true
+    Set-StatusBar -Text "Log file created - Open Log to follow the install"
+    Write-Host "Log available: [$($Script:LastLogPath)]"
+  }
 
   if ($Run.Mode -eq 'PsExec') {
     if ($Run.Process.HasExited) {
@@ -1299,7 +1394,7 @@ function Import-HistoryEntry {
 
   Set-FormState -State $Entry
   if ($Entry.ArgumentsUnreadable) {
-    Set-StatusBar -Warning -Text "Loaded run from $($Entry.Timestamp) WITHOUT its arguments - they were saved on another account or device and can't be decrypted here. Re-enter them before running."
+    Set-StatusBar -Warning -Persist -Text "Loaded run from $($Entry.Timestamp) WITHOUT its arguments - they were saved on another account or device and can't be decrypted here. Re-enter them before running."
   }
   else {
     Set-StatusBar -Text "Loaded run from $($Entry.Timestamp)"
@@ -1434,6 +1529,7 @@ $Script:TestForUpdate = {
     UpdateAvailable = ($latestVersion -gt $CurrentVersion)
     LatestVersion   = $latestVersion
     HtmlUrl         = $release.html_url
+    Tag             = $release.tag_name
   }
 }
 
@@ -1442,6 +1538,9 @@ function Start-BackgroundUpdateCheck {
   # then polls for completion on the UI thread.
   [CmdletBinding()]
   param()
+
+  # Detect the launch channel once, so clicking 'Update Available' doesn't have to
+  if (-not $Script:UpdateChannel) { $Script:UpdateChannel = Get-UpdateChannel }
 
   try {
     $Script:UpdatePowerShell = [powershell]::Create()
@@ -1487,8 +1586,104 @@ function Show-UpdateAvailable {
   if (-not $Result.UpdateAvailable) { return }
 
   $Script:LatestReleaseUrl = if ($Result.HtmlUrl) { $Result.HtmlUrl } else { $Script:ReleasesPageUrl }
+  $Script:LatestReleaseTag = $Result.Tag
   $MenuItem_UpdateAvailable.Header = "Update Available: v$($Result.LatestVersion)"
   $MenuItem_UpdateAvailable.Visibility = [System.Windows.Visibility]::Visible
+}
+
+function Get-UpdateChannel {
+  # Works out how the script was launched, so the update replaces the right copy.
+  # RightClick is checked before LooseFile because both have a script path on disk.
+  [CmdletBinding()]
+  param()
+
+  if ([string]::IsNullOrEmpty($PSCommandPath)) {
+    # iex (irm ...): nothing on disk to update, and the next launch is always the latest
+    $Channel = 'Web'
+  }
+  else {
+    $ScriptFolder = Split-Path -Path $PSCommandPath -Parent
+    if ($ScriptFolder -eq $Script:RightClickMenuFolderPath) {
+      $Channel = 'RightClick'
+    }
+    else {
+      # Install-Script records the install in this file next to the script. Checking for it directly
+      # avoids Get-InstalledScript, which loads PowerShellGet and held up the window by 4-6 seconds.
+      $InstalledInfo = Join-Path -Path $ScriptFolder -ChildPath 'InstalledScriptInfos\RunAsSystem_InstalledScriptInfo.xml'
+      if (Test-Path -LiteralPath $InstalledInfo) {
+        $Channel = 'PSGallery'
+      }
+      else {
+        $Channel = 'LooseFile'
+      }
+    }
+  }
+
+  Write-Host "Update channel: [$Channel]"
+  return $Channel
+}
+
+function Open-ReleasePage {
+  # Fallback for every update path: open the newer release, or the releases list
+  if ($Script:LatestReleaseUrl) { Start-Process $Script:LatestReleaseUrl }
+  else { Start-Process $Script:ReleasesPageUrl }
+}
+
+function Update-ScriptFile {
+  # Replaces the .ps1 with the script from the release tag. Returns $false when it can't
+  # (offline, locked, read-only), so the caller can fall back to the release page.
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ScriptPath,
+    [Parameter(Mandatory = $true)]
+    [string]$Tag
+  )
+
+  $DownloadUrl = "https://raw.githubusercontent.com/$($Script:GitHubRepo)/$Tag/$($Script:ScriptName)"
+  $TempFile = Join-Path -Path $env:TEMP -ChildPath 'RunAsSystem.update.ps1'
+
+  try {
+    Write-Host "Downloading update: [$DownloadUrl]"
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempFile -UseBasicParsing -ErrorAction Stop
+    if (-not (Test-Path -LiteralPath $TempFile) -or (Get-Item -LiteralPath $TempFile).Length -eq 0) {
+      throw 'The downloaded file is empty.'
+    }
+    # Never replace a working script with one that won't run (a truncated download or an error page)
+    $ParseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($TempFile, [ref]$null, [ref]$ParseErrors)
+    if ($ParseErrors) {
+      throw "The downloaded script has $(@($ParseErrors).Count) parse error(s)."
+    }
+    Write-Host "Replacing script:   [$ScriptPath]"
+    Copy-Item -LiteralPath $TempFile -Destination $ScriptPath -Force -ErrorAction Stop
+    return $true
+  }
+  catch {
+    Write-Host "Update failed: $($_.Exception.Message)"
+    return $false
+  }
+  finally {
+    Remove-Item -LiteralPath $TempFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Restart-Script {
+  # Starts the updated script and closes this window. This process is already elevated, so the
+  # new one is too, without a UAC prompt. Only the file is carried over, like the elevation relaunch.
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ScriptPath,
+    [string]$FilePath
+  )
+
+  $ArgumentList = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$ScriptPath`""
+  if ($FilePath) { $ArgumentList += " -FilePath `"$FilePath`"" }
+
+  Write-Host "Relaunching updated script: [$ScriptPath]"
+  Start-Process -FilePath $Script:CurrentPowerShellPath -ArgumentList $ArgumentList
+  $formRunAsSystem.Close()
 }
 
 #### Right Click Menu ####
@@ -1531,8 +1726,15 @@ function Install-RightClickMenu {
     }
   }
 
-  # Always Windows PowerShell 5.1 - it's on every device
-  $Command = "`"$($Script:WindowsPowerShellPath)`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$ScriptPath`" -FilePath `"%1`""
+  # Prefer pwsh 7.4+ when installed (like GetMSIInformation), otherwise Windows PowerShell 5.1, which is on every device.
+  # Looked up here rather than at startup, so it reflects what's installed when the menu is (re)installed.
+  $MenuPowerShellPath = $Script:WindowsPowerShellPath
+  $Pwsh = Get-Command -Name pwsh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($Pwsh -and $Pwsh.Version -ge [Version]'7.4') {
+    $MenuPowerShellPath = $Pwsh.Path
+  }
+  Write-Host "Menu PowerShell:    [$MenuPowerShellPath]"
+  $Command = "`"$MenuPowerShellPath`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$ScriptPath`" -FilePath `"%1`""
 
   foreach ($Extension in $Script:SupportedExtensions) {
     $KeyPath = "HKCU:\Software\Classes\SystemFileAssociations\$Extension\shell\$($Script:RightClickMenuKeyName)"
@@ -2851,13 +3053,16 @@ Add-Type -AssemblyName WindowsBase
                       FontSize="10"
                       FontWeight="SemiBold"
                       Foreground="{StaticResource TextMuted}"/>
+                  <!-- Left-aligned so only the code itself is the click-to-copy target, not the empty space beside it -->
                   <TextBlock Name="txtblk_ExitCode"
+                      HorizontalAlignment="Left"
                       Text="--"
                       FontSize="34"
                       FontWeight="Bold"
                       Foreground="{StaticResource Text}"/>
                   <!-- Hex as well: EXE installers often document their codes in hex, and HRESULTs are easier to look up that way -->
                   <TextBlock Name="txtblk_ExitCodeHex"
+                      HorizontalAlignment="Left"
                       FontFamily="Consolas"
                       FontSize="12"
                       Margin="0,-4,0,0"
@@ -2950,7 +3155,7 @@ $readerformRunAsSystem = New-Object System.Xml.XmlNodeReader $XAMLformRunAsSyste
 # Create Variables for all the controls in the XAML form
 $XAMLformRunAsSystem.SelectNodes("//*[@Name]") | ForEach-Object { Set-Variable -Name ($_.Name) -Value $formRunAsSystem.FindName($_.Name) -Scope Script }
 
-# The status bar text the window opens with, so Reset can put it back
+# The status bar text the window opens with, so Reset and the status message timer can put it back
 $Script:DefaultStatusBarText = $txtblk_StatusBar.Text
 
 # Timer that watches a run in progress
@@ -3005,8 +3210,10 @@ $formRunAsSystem.Add_Loaded({
     # Load history
     Update-HistoryList
 
-    # Background update check (non-blocking).
-    Start-BackgroundUpdateCheck
+    # Defer the update check until the window has rendered and come to the foreground.
+    $formRunAsSystem.Dispatcher.InvokeAsync({
+        Start-BackgroundUpdateCheck
+      }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null
 
     # Pre-fill from parameters
     if ($Arguments) { $txt_Arguments.Text = $Arguments }
@@ -3082,6 +3289,10 @@ $btn_CommandLine_Copy.Add_Click({
       Set-StatusBar -Text "Command line copied to the clipboard"
     }
   })
+
+#### Result ####
+$txtblk_ExitCode.Add_MouseLeftButtonUp({ Copy-ExitCode -Text $txtblk_ExitCode.Text })
+$txtblk_ExitCodeHex.Add_MouseLeftButtonUp({ Copy-ExitCode -Text $txtblk_ExitCodeHex.Text })
 
 #### Run ####
 $btn_Run.Add_Click({ Start-SystemRun })
@@ -3199,9 +3410,44 @@ $MenuItem_CheckForUpdates.Add_Click({
   })
 
 $MenuItem_UpdateAvailable.Add_Click({
-    # Open the download page for the newer release.
-    if ($Script:LatestReleaseUrl) { Start-Process $Script:LatestReleaseUrl }
-    else { Start-Process $Script:ReleasesPageUrl }
+    # Relaunching closes the window, which would orphan the run's exit code
+    if ($Script:CurrentRun) {
+      Set-StatusBar -Warning -Text "Wait for the current run to finish before updating"
+      return
+    }
+
+    # Reopen the loaded file in the updated instance
+    $CurrentFile = $txt_FilePath.Text.Trim().Trim('"')
+
+    switch ($Script:UpdateChannel) {
+      'PSGallery' {
+        try {
+          Write-Host "Updating via PowerShell Gallery: [Update-Script RunAsSystem -Force]"
+          Update-Script -Name 'RunAsSystem' -Force -ErrorAction Stop
+          $Installed = Get-InstalledScript -Name 'RunAsSystem' -ErrorAction SilentlyContinue
+          $UpdatedPath = if ($Installed) { Join-Path $Installed.InstalledLocation $Script:ScriptName } else { $PSCommandPath }
+          Restart-Script -ScriptPath $UpdatedPath -FilePath $CurrentFile
+        }
+        catch {
+          Write-Host "PowerShell Gallery update failed: $($_.Exception.Message)"
+          Open-ReleasePage
+        }
+      }
+      { $_ -in 'RightClick', 'LooseFile' } {
+        # The registry entry points at the script path, not its contents, so the right-click menu needs no changes
+        if ($Script:LatestReleaseTag -and (Update-ScriptFile -ScriptPath $PSCommandPath -Tag $Script:LatestReleaseTag)) {
+          Restart-Script -ScriptPath $PSCommandPath -FilePath $CurrentFile
+        }
+        else {
+          Set-StatusBar -Warning -Text "Couldn't update the script in place, opening the release page"
+          Open-ReleasePage
+        }
+      }
+      default {
+        # Web: the next iex launch is already the latest
+        Open-ReleasePage
+      }
+    }
   })
 
 #### Title Bar Handlers ####
