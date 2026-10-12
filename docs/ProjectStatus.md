@@ -120,7 +120,7 @@ Tested in Windows PowerShell 5.1 while building the tool (not elevated):
 - [x] Test click-to-copy on the exit code in the app: decimal and hex each copy on their own, and placeholders (`--`, `Stopped`, `Error`) show no hand cursor and copy nothing (the owner confirmed it on 2026-10-10).
 - [x] Test the status bar timer in the app: a message clears after 4 seconds, a second message before then restarts the countdown, and the `-Persist` "WITHOUT its arguments" warning stays (the owner confirmed it on 2026-10-10).
 - [ ] Run the elevated tests above.
-- [ ] Add screenshots to `Images/` and the README.
+- [x] Add screenshots to `Images/` and the README (2026-10-12: `Screenshot-Empty.png`, `Screenshot-MSI.png`, `Screenshot-PS1.png`, captured at 100% scale with `PrintWindow` so the rounded corners stay transparent). Retake them when the UI changes.
 - [ ] Optionally add a short URL on michaeltheadmin.com (like `msiapp.michaeltheadmin.com`) and update the README.
 - [x] Publish the first release with the Release workflow (2026.10.9.0, then 2026.10.9.1).
 - [ ] Optionally publish to the PowerShell Gallery. The PSGallery update channel needs it.
