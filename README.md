@@ -81,6 +81,21 @@ The installer's own folder is always used as the working directory, the same as 
 
 The **Command Line** box shows exactly what will run, and you can copy it with the copy button.
 
+## Variables in ArgumentList
+EXE installers each have their own log switch, so there's no log checkbox for them. Instead, the line under ArgumentList has variables you can click to insert at the cursor. They're filled in when the installer runs:
+
+| Variable | Becomes |
+| --- | --- |
+| `{LogFile}` | A log file next to the installer: `C:\Pkgs\Setup.exe.log` |
+| `{InstallerDir}` | The installer's folder, without a trailing backslash: `C:\Pkgs` |
+| `{InstallerName}` | The installer's file name, with its extension: `Setup.exe` |
+
+For example, `/log "{LogFile}"` for a WiX Burn bundle, `/LOG="{LogFile}"` for Inno Setup, or `/log "{InstallerDir}\{InstallerName}.Uninstall.log"` for your own name. The extension is kept so the logs of a product's EXE and MSI installers don't mix.
+- These only fill in a path. The installer writes a log only if you pass the path with its own log switch, so check the vendor's documentation.
+- When `{LogFile}` is in the arguments, **Open Log** opens that file once the installer creates it, the same as an MSI log. A path built from `{InstallerDir}` and `{InstallerName}` isn't followed.
+- The Command Line box shows the values filled in. **Copy arguments** copies just the arguments with the values filled in.
+- History saves the variables as you typed them, so loading a run works out the paths again.
+
 ## Stopping a Run
 While a run is in progress, a **Stop** button appears next to Run. It works the same way for every file type and in both Session 0 and PsExec modes. It ends the running process and anything it started, and records the run as **Stopped** in history. Stopping a process partway through can leave the software partly installed.
 
