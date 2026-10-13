@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 2026.10.10.0
+.VERSION 2026.10.12.0
 
 .GUID 8f2d6c1e-4b7a-4e3f-9a5d-2c8b1e7f6a40
 
@@ -25,7 +25,13 @@
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
-2026.10.10.0  - Clicking Update Available now installs the update and reopens the tool with the same file loaded, like GetMSIInformation
+2026.10.12.0  - Session 0 runs of EXE, PS1, CMD, BAT and VBS files now capture what the installer writes to stdout and stderr, which was lost before
+              The latest line of output is shown in the result as a Stdout line, updated while the installer runs; click it to open the full output
+              The installer's exit code and arguments are unchanged, and the last 50 outputs are kept in %LOCALAPPDATA%\RunAsSystem\Output
+              Open Folder moved into the File box as a folder icon, available whenever the file exists, before or after a run
+              Open Log only appears when there's a log to open: an MSI or MSP run with logging on, once the log file has been written
+              Evened out the spacing above and below the Run button
+2026.10.10.0  -Clicking Update Available now installs the update and reopens the tool with the same file loaded, like GetMSIInformation
               A downloaded or right-click menu copy of the script is replaced with the new version, and a PowerShell Gallery install is updated with Update-Script
               If the update can't be installed (offline, the file is locked or the download is damaged), the release page opens instead
               Launched with iex (irm ...), it still opens the release page, since the next launch is already the latest
@@ -103,11 +109,14 @@ param (
 # Script Name
 $Script:ScriptName = "RunAsSystem.ps1"
 # Script Version
-[System.Version]$Script:ScriptVersion = "2026.10.10.0"
+[System.Version]$Script:ScriptVersion = "2026.10.12.0"
 # App Data folder (history and right-click menu files)
 $Script:AppDataPath = "$env:LOCALAPPDATA\RunAsSystem"
 $Script:HistoryPath = "$Script:AppDataPath\History.json"
 $Script:HistoryMaxEntries = 50
+# Captured stdout and stderr of Session 0 runs, one file per run, the same number kept as history
+$Script:OutputFolderPath = "$Script:AppDataPath\Output"
+$Script:OutputMaxFiles = 50
 # Right Click Menu
 $Script:RightClickMenuName = "Run as SYSTEM"
 $Script:RightClickMenuKeyName = "RunAsSystem"
@@ -381,13 +390,13 @@ function Reset-Form {
 }
 
 function Clear-RunResult {
-  # The result, Open Log and Open Folder all belong to the last run, so they're cleared together
+  # The result, Open Log and the Stdout line all belong to the last run, so they're cleared together
   Set-ResultDisplay -ExitCodeText '--' -Meaning 'Not run yet'
   $Script:ResultFilePath = $null
   $Script:LastLogPath = $null
-  $Script:LastWorkingDirectory = $null
-  $btn_OpenLog.IsEnabled = $false
-  $btn_OpenFolder.IsEnabled = $false
+  $Script:LastOutputPath = $null
+  $btn_OpenLog.Visibility = 'Collapsed'
+  $txtblk_Stdout.Visibility = 'Collapsed'
 }
 
 function Reset-FormOptions {
@@ -556,6 +565,9 @@ function Update-FileSelection {
   $panel_MsiOptions.Visibility = if ($IsWindowsInstaller) { 'Visible' } else { 'Collapsed' }
   $panel_MsiLog.Visibility = if ($IsWindowsInstaller) { 'Visible' } else { 'Collapsed' }
   $cmb_MsiAction.IsEnabled = ($Type -eq 'MSI')
+
+  # Open Folder is available whenever the file exists, before or after a run
+  $btn_OpenFolder.Visibility = if ($Type -and (Test-Path -LiteralPath $Path -PathType Leaf)) { 'Visible' } else { 'Collapsed' }
 
   # Settings for one file type rarely suit another (MSI properties passed to an EXE, for example),
   # so start fresh when the type changes. While a path is being typed the type is briefly unknown,
@@ -814,6 +826,151 @@ function Clear-StaleSystemTasks {
   }
 }
 
+#### Output Capture ####
+function Test-CaptureOutput {
+  # Only Session 0 output is captured: it's the only mode where nobody can see the console. PsExec and
+  # Current user show the window, and redirecting there would hide prompts like 'pause'. msiexec writes
+  # nothing to stdout, so MSI and MSP keep running directly.
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Spec,
+    [Parameter(Mandatory = $true)]
+    [string]$Mode
+  )
+
+  return ($Mode -eq 'Session0' -and $Spec.Type -notin 'MSI', 'MSP')
+}
+
+function Get-OutputCaptureCommand {
+  # Task Scheduler can't redirect a process's output, so the task runs this small Windows PowerShell
+  # launcher instead. It starts the installer with its arguments exactly as typed (no cmd parsing),
+  # copies stdout and stderr into one file as they're written, and exits with the installer's exit code,
+  # so LastTaskResult is still the installer's. -EncodedCommand keeps the installer path out of the
+  # launcher's command line, so Stop finds the installer itself rather than the launcher.
+  param (
+    [Parameter(Mandatory = $true)]
+    [PSCustomObject]$Spec,
+    [Parameter(Mandatory = $true)]
+    [string]$OutputPath
+  )
+
+  $Quote = { param ($Value) "'" + ([string]$Value).Replace("'", "''") + "'" }
+
+  $Command = @"
+`$ErrorActionPreference = 'Stop'
+`$OutputPath = $(& $Quote $OutputPath)
+`$Output = `$null
+try {
+  # No buffering and shared read access, so the file can be opened while the installer is still running
+  `$Output = [System.IO.Stream]::Synchronized((New-Object System.IO.FileStream(`$OutputPath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite, 1)))
+  `$StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+  `$StartInfo.FileName = $(& $Quote $Spec.Execute)
+  `$StartInfo.Arguments = $(& $Quote $Spec.Arguments)
+  `$StartInfo.WorkingDirectory = $(& $Quote $Spec.WorkingDirectory)
+  `$StartInfo.UseShellExecute = `$false
+  `$StartInfo.RedirectStandardOutput = `$true
+  `$StartInfo.RedirectStandardError = `$true
+  `$Process = [System.Diagnostics.Process]::Start(`$StartInfo)
+  `$Copies = [System.Threading.Tasks.Task[]]@(`$Process.StandardOutput.BaseStream.CopyToAsync(`$Output), `$Process.StandardError.BaseStream.CopyToAsync(`$Output))
+  `$Process.WaitForExit()
+  # A child left running (an app the installer launched) can hold the pipes open, so don't wait for it
+  `$null = [System.Threading.Tasks.Task]::WaitAll(`$Copies, 5000)
+  exit `$Process.ExitCode
+}
+catch {
+  `$Message = [System.Text.Encoding]::UTF8.GetBytes("RunAsSystem: unable to start the process: `$(`$_.Exception.Message)``r``n")
+  try { if (-not `$Output) { `$Output = New-Object System.IO.FileStream(`$OutputPath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite) }; `$Output.Write(`$Message, 0, `$Message.Length) } catch {}
+  exit 1
+}
+finally {
+  if (`$Output) { try { `$Output.Dispose() } catch {} }
+}
+"@
+
+  $Encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Command))
+  [PSCustomObject]@{
+    Execute   = $Script:WindowsPowerShellPath
+    Arguments = "-NoLogo -NoProfile -NonInteractive -EncodedCommand $Encoded"
+  }
+}
+
+function New-OutputFile {
+  # Created here, in this user's profile, so this user can always open it whoever the installer runs as
+  param (
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  if (-not (Test-Path -LiteralPath $Script:OutputFolderPath)) { $null = New-Item -Path $Script:OutputFolderPath -ItemType Directory -Force }
+
+  # Keep the same number of outputs as history entries, so it doesn't grow forever
+  $Old = @(Get-ChildItem -LiteralPath $Script:OutputFolderPath -Filter '*.txt' -File -ErrorAction SilentlyContinue | Sort-Object -Property LastWriteTime -Descending | Select-Object -Skip ($Script:OutputMaxFiles - 1))
+  foreach ($File in $Old) { Remove-Item -LiteralPath $File.FullName -Force -ErrorAction SilentlyContinue }
+
+  $Path = Join-Path -Path $Script:OutputFolderPath -ChildPath "$Name.txt"
+  [System.IO.File]::WriteAllText($Path, '')
+  return $Path
+}
+
+function Test-OutputFile {
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Path
+  )
+
+  if (-not $Path) { return $false }
+  try { return ((Get-Item -LiteralPath $Path -ErrorAction Stop).Length -gt 0) } catch { return $false }
+}
+
+function Get-OutputLastLine {
+  # Only the end of the file is read, so a chatty installer doesn't slow the 500 ms tick down.
+  # ReadWrite sharing because the launcher still has the file open while the installer runs.
+  param (
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  $Stream = $null
+  try {
+    $Stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $Count = [int][Math]::Min($Stream.Length, 4096)
+    if ($Count -eq 0) { return $null }
+    $null = $Stream.Seek(-$Count, [System.IO.SeekOrigin]::End)
+    $Bytes = New-Object byte[] $Count
+    $Read = $Stream.Read($Bytes, 0, $Count)
+    # Console programs write in the OEM code page (cmd, and powershell.exe writing to a pipe)
+    $Encoding = [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    $Text = $Encoding.GetString($Bytes, 0, $Read)
+    # Split on CR too, so a progress line that redraws itself shows its latest state
+    $Lines = @($Text -split '[\r\n]+' | Where-Object { $_.Trim() })
+    if ($Lines.Count -eq 0) { return $null }
+    return $Lines[-1].Trim()
+  }
+  catch {
+    return $null
+  }
+  finally {
+    if ($Stream) { $Stream.Dispose() }
+  }
+}
+
+function Update-StdoutLine {
+  # Shows the latest line of output under the run details. Hidden until something has been written.
+  param (
+    [Parameter(Mandatory = $false)]
+    [string]$Path
+  )
+
+  $Line = if ($Path) { Get-OutputLastLine -Path $Path } else { $null }
+  if ($Line) {
+    $txtblk_Stdout.Text = "Stdout: $Line"
+    $txtblk_Stdout.Visibility = 'Visible'
+  }
+  else {
+    $txtblk_Stdout.Visibility = 'Collapsed'
+  }
+}
+
 #### Running ####
 function Set-RunningState {
   param (
@@ -926,15 +1083,18 @@ function Start-SystemRun {
     TaskName   = $null
     Process    = $null
     CommandRun = $txt_CommandLine.Text
+    OutputPath = $null
+    # Size of the output file at the last check, so the Stdout line is only re-read when something new is written
+    OutputLength = 0
   }
 
   # Point Open Log and Open Folder at this run straight away, so they never open the previous run's files.
   # Open Log stays disabled until the installer creates the log (Watch-SystemRun), so it can be opened mid-install.
   $Script:ResultFilePath = $State.FilePath
   $Script:LastLogPath = $Spec.LogPath
-  $Script:LastWorkingDirectory = $Spec.WorkingDirectory
-  $btn_OpenLog.IsEnabled = $false
-  $btn_OpenFolder.IsEnabled = [bool]$Script:LastWorkingDirectory
+  $Script:LastOutputPath = $null
+  $btn_OpenLog.Visibility = 'Collapsed'
+  $txtblk_Stdout.Visibility = 'Collapsed'
 
   Set-RunningState -Running $true
   $ModeText = Get-ModeText -Mode $State.Mode
@@ -957,6 +1117,15 @@ function Start-SystemRun {
         Execute          = $Spec.Execute
         TaskArguments    = $Spec.Arguments
         WorkingDirectory = $Spec.WorkingDirectory
+      }
+      if (Test-CaptureOutput -Spec $Spec -Mode $State.Mode) {
+        $OutputPath = New-OutputFile -Name $TaskName
+        $Capture = Get-OutputCaptureCommand -Spec $Spec -OutputPath $OutputPath
+        $TaskParams.Execute = $Capture.Execute
+        $TaskParams.TaskArguments = $Capture.Arguments
+        $Script:CurrentRun.OutputPath = $OutputPath
+        $Script:LastOutputPath = $OutputPath
+        Write-Host "Capturing output to: [$OutputPath]"
       }
       if ($State.Mode -eq 'CurrentUser') {
         # The account running this script, with the same elevation this script has
@@ -985,11 +1154,20 @@ function Watch-SystemRun {
   $Elapsed = (Get-Date) - $Run.Started
   $btn_Run.Content = "Running...  $($Elapsed.ToString('hh\:mm\:ss'))"
 
-  # Enable Open Log as soon as the log exists. Once it's enabled the check stops, so it's one Test-Path per tick at most
-  if ($Script:LastLogPath -and -not $btn_OpenLog.IsEnabled -and (Test-Path -LiteralPath $Script:LastLogPath -PathType Leaf)) {
-    $btn_OpenLog.IsEnabled = $true
+  # Show Open Log as soon as the log exists. Once it's shown the check stops, so it's one Test-Path per tick at most
+  if ($Script:LastLogPath -and $btn_OpenLog.Visibility -ne 'Visible' -and (Test-Path -LiteralPath $Script:LastLogPath -PathType Leaf)) {
+    $btn_OpenLog.Visibility = 'Visible'
     Set-StatusBar -Text "Log file created - Open Log to follow the install"
     Write-Host "Log available: [$($Script:LastLogPath)]"
+  }
+
+  # Follow the output on the Stdout line, re-reading only when the file has grown
+  if ($Run.OutputPath) {
+    try { $Length = (Get-Item -LiteralPath $Run.OutputPath -ErrorAction Stop).Length } catch { $Length = 0 }
+    if ($Length -ne $Run.OutputLength) {
+      $Run.OutputLength = $Length
+      Update-StdoutLine -Path $Run.OutputPath
+    }
   }
 
   if ($Run.Mode -eq 'PsExec') {
@@ -1143,9 +1321,11 @@ function Complete-SystemRun {
 
   # Remember the log of this run for the Open Log button
   $Script:LastLogPath = $Run.Spec.LogPath
-  $Script:LastWorkingDirectory = $Run.Spec.WorkingDirectory
-  $btn_OpenLog.IsEnabled = [bool]$Script:LastLogPath
-  $btn_OpenFolder.IsEnabled = [bool]$Script:LastWorkingDirectory
+  # Only when the log was actually written: an install that failed early, or was stopped, may never create it
+  $btn_OpenLog.Visibility = if ($Script:LastLogPath -and (Test-Path -LiteralPath $Script:LastLogPath -PathType Leaf)) { 'Visible' } else { 'Collapsed' }
+  $Script:LastOutputPath = $Run.OutputPath
+  Update-StdoutLine -Path $Run.OutputPath
+  if ($Run.OutputPath -and -not (Test-OutputFile -Path $Run.OutputPath)) { Write-Host "No output was written" }
 
   Add-HistoryEntry -Entry ([PSCustomObject]@{
       Timestamp   = $Run.Started.ToString('yyyy-MM-dd HH:mm:ss')
@@ -1161,6 +1341,7 @@ function Complete-SystemRun {
       Meaning     = $Meaning
       Category    = $Category
       Duration    = $Duration.ToString('hh\:mm\:ss')
+      OutputPath  = $Run.OutputPath
     })
 
   $Script:CurrentRun = $null
@@ -2837,9 +3018,18 @@ Add-Type -AssemblyName WindowsBase
                     Content="File"/>
                 <TextBox Grid.Column="1"
                     Name="txt_FilePath"
-                    Padding="8,0,36,0"
+                    Padding="8,0,64,0"
                     ToolTip="Path to the installer. Drag and drop a file anywhere on this window, paste a path, or Browse."/>
-                <!-- Sits inside the right end of the file box; the box's right padding keeps the path from running under it -->
+                <!-- These sit inside the right end of the file box; the box's right padding keeps the path from running under them.
+                     Open Folder lives here rather than in the result because it's about the file, not the run. -->
+                <Button Grid.Column="1"
+                    Name="btn_OpenFolder"
+                    Style="{StaticResource SmallIconButton}"
+                    HorizontalAlignment="Right"
+                    Margin="0,0,36,0"
+                    Content="&#xED25;"
+                    Visibility="Collapsed"
+                    ToolTip="Open the installer's folder"/>
                 <Button Grid.Column="1"
                     Name="btn_Reset"
                     Style="{StaticResource SmallIconButton}"
@@ -3011,8 +3201,9 @@ Add-Type -AssemblyName WindowsBase
             </DockPanel>
           </Border>
           <!-- Stop is a separate button rather than Run changing into Stop, so double-clicking Run can't stop the process -->
+          <!-- The same margin top and bottom, so the gap to the cards above and below matches -->
           <Grid Grid.Row="3"
-              Margin="0,5.5,0,0">
+              Margin="0,3,0,3">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
@@ -3045,7 +3236,8 @@ Add-Type -AssemblyName WindowsBase
                   <ColumnDefinition Width="Auto"
                       MinWidth="110"/>
                   <ColumnDefinition Width="*"/>
-                  <ColumnDefinition Width="120"/>
+                  <!-- Auto, so the text gets the full width when Open Log is hidden -->
+                  <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0"
                     VerticalAlignment="Center">
@@ -3081,18 +3273,43 @@ Add-Type -AssemblyName WindowsBase
                       TextWrapping="Wrap"
                       Margin="0,4,0,0"
                       Foreground="{StaticResource TextMuted}"/>
+                  <!-- The latest line of captured output, so a Session 0 script isn't a black box. One line, so the
+                       panel keeps its fixed height. Left-aligned so only the text is the click-to-open target. -->
+                  <TextBlock Name="txtblk_Stdout"
+                      HorizontalAlignment="Left"
+                      FontFamily="Consolas"
+                      FontSize="12"
+                      Margin="0,4,0,0"
+                      TextTrimming="CharacterEllipsis"
+                      Cursor="Hand"
+                      Visibility="Collapsed"
+                      ToolTip="Click to open the full output (stdout and stderr)">
+                    <!-- Accent, and underlined on hover, so it reads as a link -->
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Setter Property="Foreground"
+                            Value="{StaticResource Accent}"/>
+                        <Style.Triggers>
+                          <Trigger Property="IsMouseOver"
+                              Value="True">
+                            <Setter Property="Foreground"
+                                Value="{StaticResource AccentHover}"/>
+                            <Setter Property="TextDecorations"
+                                Value="Underline"/>
+                          </Trigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
                 </StackPanel>
-                <StackPanel Grid.Column="2"
-                    VerticalAlignment="Center">
-                  <Button Name="btn_OpenLog"
-                      Content="Open Log"
-                      Height="34"
-                      IsEnabled="False"/>
-                  <Button Name="btn_OpenFolder"
-                      Content="Open Folder"
-                      Height="34"
-                      IsEnabled="False"/>
-                </StackPanel>
+                <!-- Only shown when this run has a log to open -->
+                <Button Grid.Column="2"
+                    Name="btn_OpenLog"
+                    Content="Open Log"
+                    Width="110"
+                    Height="34"
+                    VerticalAlignment="Center"
+                    Visibility="Collapsed"/>
               </Grid>
             </DockPanel>
           </Border>
@@ -3333,8 +3550,21 @@ $btn_OpenLog.Add_Click({
   })
 
 $btn_OpenFolder.Add_Click({
-    if ($Script:LastWorkingDirectory -and (Test-Path -LiteralPath $Script:LastWorkingDirectory)) {
-      Invoke-Item -LiteralPath $Script:LastWorkingDirectory
+    $Path = $txt_FilePath.Text.Trim().Trim('"')
+    if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+      $Folder = Split-Path -Path $Path -Parent
+      Write-Host "Opening Folder: [$Folder]"
+      Invoke-Item -LiteralPath $Folder
+    }
+  })
+
+$txtblk_Stdout.Add_MouseLeftButtonUp({
+    if ($Script:LastOutputPath -and (Test-Path -LiteralPath $Script:LastOutputPath)) {
+      Write-Host "Opening Output: [$($Script:LastOutputPath)]"
+      Invoke-Item -LiteralPath $Script:LastOutputPath
+    }
+    else {
+      [System.Windows.MessageBox]::Show("The output file was not found:`n$($Script:LastOutputPath)", "Run As SYSTEM", "OK", "Information") | Out-Null
     }
   })
 

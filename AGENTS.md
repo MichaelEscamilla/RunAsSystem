@@ -33,6 +33,7 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
    - PsExec
    - exit codes
    - Scheduled Task (Session 0)
+   - output capture
    - running
    - history
    - elevated drag and drop
@@ -54,6 +55,7 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
 ## How SYSTEM Execution Works
 
 - **Session 0 mode**: `Register-SystemTask` uses the `Schedule.Service` COM object, not the ScheduledTasks module. The task's action is the installer itself (msiexec.exe, the exe, powershell.exe, cmd.exe or cscript.exe), so the installer's exit code becomes `LastTaskResult`. Don't add a wrapper script.
+  - **The one exception is output capture.** For Session 0 runs of anything except MSI and MSP (`Test-CaptureOutput`), the action is a Windows PowerShell `-EncodedCommand` launcher (`Get-OutputCaptureCommand`). It starts the installer with `System.Diagnostics.Process` (arguments passed through unchanged), copies stdout and stderr into `%LOCALAPPDATA%\RunAsSystem\Output\<task name>.txt`, and exits with the installer's exit code. Keep it inline and encoded: there's no script file, and the installer path stays out of the launcher's command line so Stop finds the installer. Don't use `Start-Process` in it, because it treats `[` `]` in paths as wildcards.
   - Task settings: principal `S-1-5-18`, `LogonType` 5, `RunLevel` 1, `Priority` 4, `ExecutionTimeLimit` `PT0S`.
   - **Current user mode** uses the same task with different principal parameters (`-UserId`, `-LogonType`, `-RunLevel`): the script account's SID, `LogonType` 3 (interactive token, so no password), and `RunLevel` 1 if the script is elevated, otherwise 0. Future user-context variations, such as the session user or forcing no elevation, should change only these parameters.
   - It has a disabled trigger that expires after 24 hours, plus `DeleteExpiredTaskAfter` `PT0S`, so a task left behind by a crash deletes itself.
