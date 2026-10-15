@@ -61,6 +61,7 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
   - It has a disabled trigger that expires after 24 hours, plus `DeleteExpiredTaskAfter` `PT0S`, so a task left behind by a crash deletes itself.
   - Every task description contains `$Script:TaskMarker`. Only ever delete tasks that have the marker.
 - `Watch-SystemRun` runs on a 500 ms `DispatcherTimer`. Task states 2 (queued) and 4 (running) mean the installer is still running. `LastTaskResult` 267009 or 267011 means the task hasn't finished or hasn't started yet.
+- **Tools** (`Test-IsTool`: an EXE in System32, SysWOW64 or a PowerShell folder) run from `$Script:ToolWorkingDirectory`, and Stop only matches their processes that descend from the Task Scheduler service or `PSEXESVC.exe`, because their path isn't unique to a run.
 - **PsExec mode** runs `PsExec64.exe -accepteula -nobanner -s -i <current session> -w "<dir>" "<exe>" <args>` with `Start-Process -PassThru`.
 - **Elevated drag and drop**: `Enable-ElevatedDragDrop` compiles a small C# class (`RunAsSystem.ElevatedDropTarget`) that:
   - calls `RevokeDragDrop` on the window
