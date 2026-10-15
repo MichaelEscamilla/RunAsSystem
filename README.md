@@ -50,7 +50,7 @@ No PsExec is needed. A one-time Scheduled Task, based on the approach [Ben Whitm
 ### Interactive (PsExec)
 The installer runs as SYSTEM **on your desktop**, so any installer UI is visible. This is useful for working out why a silent install hangs.
 
-The tool looks for `PsExec64.exe` (or `PsExec.exe`) in the installer's folder first, then on the `PATH`. If it isn't found, the tool offers to download it from [live.sysinternals.com](https://live.sysinternals.com) into the installer's folder.
+The tool looks for `PsExec64.exe` (or `PsExec.exe`) in `%LOCALAPPDATA%\RunAsSystem\PsExec` first, then on the `PATH`. If it isn't found, the tool offers to download it from [live.sysinternals.com](https://live.sysinternals.com) into `%LOCALAPPDATA%\RunAsSystem\PsExec`.
 
 ### Current User
 The installer runs as **the account running RunAsSystem**, on your desktop, with the same elevation as RunAsSystem. Because the app always runs elevated, this normally means elevated. The option shows the account and its elevation, for example *ESKIMOLED\Eskim (elevated)*.

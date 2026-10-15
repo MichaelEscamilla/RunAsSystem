@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 2026.10.13.0
+.VERSION 2026.10.14.0
 
 .GUID 8f2d6c1e-4b7a-4e3f-9a5d-2c8b1e7f6a40
 
@@ -25,7 +25,17 @@
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
-2026.10.13.0  - Variables for ArgumentList, filled in when the installer runs: {LogFile}, {InstallerDir} and {InstallerName}
+2026.10.14.0  - PS1 options: run with Windows PowerShell 5.1, 32-bit 5.1 or PowerShell 7, passed as -File, -Command or -EncodedCommand
+              Choose the -ExecutionPolicy (Bypass by default, or not set to use the device policy) and add extra PowerShell parameters
+              PS1 options are saved in history and shown on the entry when they aren't the default
+              New Tools menu beside Browse fills File with powershell.exe, 32-bit Windows PowerShell, pwsh 7 or cmd.exe
+              Tools run from C:\Windows\Temp, and Stop only ends their processes started by the run
+              PowerShell tools get the PowerShell options, so the ArgumentList can run as code with -Command or -EncodedCommand
+              Running a bare shell in Session 0 offers to switch to Interactive (PsExec), since it would wait for input with no window
+              PsExec is now downloaded to %LOCALAPPDATA%\RunAsSystem\PsExec instead of the installer's folder, so System32 and shares are never written to
+              Switching to Interactive mode no longer lags when PsExec hasn't been downloaded yet
+              The File box scrolls to show the end of a long path, so the file name is visible
+2026.10.13.0  -Variables for ArgumentList, filled in when the installer runs: {LogFile}, {InstallerDir} and {InstallerName}
               Click a variable on the new Insert line under ArgumentList to add it at the cursor; its tooltip shows the value for the loaded file
               {LogFile} is a log next to the installer (Setup.exe.log), for EXE installers that take a log path with their own switch, like /log "{LogFile}"
               Open Log now works for any installer with {LogFile} in its arguments, not only MSI and MSP
@@ -81,7 +91,7 @@ Two run modes are available:
   - Session 0 (default): A one-time Scheduled Task runs the installer as SYSTEM in session 0 with no desktop,
     exactly like the ConfigMgr client and the Intune Management Extension. No PsExec required.
   - Interactive (PsExec): Runs the installer as SYSTEM on your desktop, so any installer UI is visible.
-    PsExec is downloaded from live.sysinternals.com into the installer's folder if it isn't already available.
+    PsExec is downloaded from live.sysinternals.com into %LOCALAPPDATA%\RunAsSystem\PsExec if it isn't already available.
 
 The exit code is reported when the installer finishes, and every run is saved to a history list so it can be re-run.
 
@@ -116,7 +126,7 @@ param (
 # Script Name
 $Script:ScriptName = "RunAsSystem.ps1"
 # Script Version
-[System.Version]$Script:ScriptVersion = "2026.10.13.0"
+[System.Version]$Script:ScriptVersion = "2026.10.14.0"
 # App Data folder (history and right-click menu files)
 $Script:AppDataPath = "$env:LOCALAPPDATA\RunAsSystem"
 $Script:HistoryPath = "$Script:AppDataPath\History.json"
@@ -124,6 +134,8 @@ $Script:HistoryMaxEntries = 50
 # Captured stdout and stderr of Session 0 runs, one file per run, the same number kept as history
 $Script:OutputFolderPath = "$Script:AppDataPath\Output"
 $Script:OutputMaxFiles = 50
+# PsExec is downloaded here, not next to the installer, so a tool's folder (System32) or a share is never written to
+$Script:PsExecFolderPath = "$Script:AppDataPath\PsExec"
 # Right Click Menu
 $Script:RightClickMenuName = "Run as SYSTEM"
 $Script:RightClickMenuKeyName = "RunAsSystem"
@@ -410,7 +422,7 @@ function Set-FormState {
   )
 
   # Set the file path first, since changing it resets the log path to the default
-  $txt_FilePath.Text = $State.FilePath
+  Set-FilePath -Path $State.FilePath
   Set-ComboBoxTag -ComboBox $cmb_MsiAction -Tag $State.MsiAction
   Set-ComboBoxTag -ComboBox $cmb_MsiUI -Tag $State.MsiUI
   $chk_Log.IsChecked = [bool]$State.LogEnabled
@@ -704,41 +716,41 @@ function Get-CommandSpec {
   }
 }
 
-function Get-PsExecPath {
-  param (
-    [Parameter(Mandatory = $false)]
-    [string]$Directory
-  )
+function Get-PsExecName {
+  if ([Environment]::Is64BitOperatingSystem) { 'PsExec64.exe' } else { 'PsExec.exe' }
+}
 
+function Get-PsExecPath {
   $Names = if ([Environment]::Is64BitOperatingSystem) { @('PsExec64.exe', 'PsExec.exe') } else { @('PsExec.exe') }
 
-  # Look in the installer's folder first
-  if ($Directory -and (Test-Path -LiteralPath $Directory)) {
-    foreach ($Name in $Names) {
-      $Candidate = Join-Path -Path $Directory -ChildPath $Name
-      if (Test-Path -LiteralPath $Candidate) { return $Candidate }
-    }
+  # Look in the app data folder first, where the tool downloads it
+  foreach ($Name in $Names) {
+    $Candidate = Join-Path -Path $Script:PsExecFolderPath -ChildPath $Name
+    if (Test-Path -LiteralPath $Candidate) { return $Candidate }
   }
 
-  # Then anywhere on the PATH
+  # Then anywhere on the PATH. Checked folder by folder rather than with Get-Command, which takes about a
+  # second per name in 5.1, and this runs on every command preview update in Interactive mode.
+  $Folders = @($env:Path -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim().Trim('"')) } | Where-Object { $_ })
   foreach ($Name in $Names) {
-    $Command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($Command) { return $Command.Source }
+    foreach ($Folder in $Folders) {
+      # A PATH entry with characters that aren't valid in a path makes Combine throw in 5.1
+      try { $Candidate = [System.IO.Path]::Combine($Folder, $Name) } catch { continue }
+      if ([System.IO.File]::Exists($Candidate)) { return $Candidate }
+    }
   }
 
   return $null
 }
 
 function Save-PsExec {
-  param (
-    [Parameter(Mandatory = $true)]
-    [string]$Directory
-  )
-
-  $Name = if ([Environment]::Is64BitOperatingSystem) { 'PsExec64.exe' } else { 'PsExec.exe' }
+  $Name = Get-PsExecName
   $Url = "https://live.sysinternals.com/$Name"
-  $Destination = Join-Path -Path $Directory -ChildPath $Name
+  $Destination = Join-Path -Path $Script:PsExecFolderPath -ChildPath $Name
 
+  if (-not (Test-Path -LiteralPath $Script:PsExecFolderPath)) {
+    New-Item -Path $Script:PsExecFolderPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+  }
   Write-Host "Downloading PsExec: [$Url] -> [$Destination]"
   Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -ErrorAction Stop
   return $Destination
@@ -814,10 +826,9 @@ function Update-CommandPreview {
   }
 
   if ($State.Mode -eq 'PsExec') {
-    $PsExec = Get-PsExecPath -Directory $Spec.WorkingDirectory
+    $PsExec = Get-PsExecPath
     if (-not $PsExec) {
-      $PsExecName = if ([Environment]::Is64BitOperatingSystem) { 'PsExec64.exe' } else { 'PsExec.exe' }
-      $PsExec = Join-Path -Path $Spec.WorkingDirectory -ChildPath $PsExecName
+      $PsExec = Join-Path -Path $Script:PsExecFolderPath -ChildPath (Get-PsExecName)
     }
     $txt_CommandLine.Text = "`"$PsExec`" $(Get-PsExecArguments -Spec $Spec)"
   }
@@ -830,13 +841,25 @@ function Update-CommandPreview {
 }
 
 function Show-FilePathEnd {
+  param(
+    # A path loaded by drop, Browse, a tool or History replaces the whole text, so there's no cursor to protect
+    [switch]$Force
+  )
   # A long path is cut off on the right, hiding the file name, which is the part that matters.
   # Not while the box is being typed in, so the cursor isn't moved out from under you.
-  if ($txt_FilePath.IsKeyboardFocused) { return }
+  if ($txt_FilePath.IsKeyboardFocused -and -not $Force) { return }
   $txt_FilePath.CaretIndex = $txt_FilePath.Text.Length
   # Queued, because when the text has just been set the box hasn't measured it yet
   $TextBox = $txt_FilePath
   $null = $TextBox.Dispatcher.BeginInvoke([Action]{ $TextBox.ScrollToHorizontalOffset([double]::MaxValue) }.GetNewClosure(), [System.Windows.Threading.DispatcherPriority]::Loaded)
+}
+
+function Set-FilePath {
+  param([string]$Path)
+  # Dropping a file doesn't move focus, so if the box was focused (after Reset, say) the
+  # TextChanged pass would leave the new path scrolled to the start
+  $txt_FilePath.Text = $Path
+  Show-FilePathEnd -Force
 }
 
 function Set-Ps1OptionsLayout {
@@ -1432,12 +1455,12 @@ function Start-SystemRun {
   # Resolve PsExec before changing any state, since it may need to be downloaded
   $PsExecPath = $null
   if ($State.Mode -eq 'PsExec') {
-    $PsExecPath = Get-PsExecPath -Directory $Spec.WorkingDirectory
+    $PsExecPath = Get-PsExecPath
     if (-not $PsExecPath) {
-      $Answer = [System.Windows.MessageBox]::Show("PsExec was not found in the installer's folder or on the PATH.`n`nDownload it from live.sysinternals.com to:`n$($Spec.WorkingDirectory)", "Run As SYSTEM - PsExec", "YesNo", "Question")
+      $Answer = [System.Windows.MessageBox]::Show("PsExec was not found in the app data folder or on the PATH.`n`nDownload it from live.sysinternals.com to:`n$($Script:PsExecFolderPath)", "Run As SYSTEM - PsExec", "YesNo", "Question")
       if ($Answer -ne 'Yes') { return }
       try {
-        $PsExecPath = Save-PsExec -Directory $Spec.WorkingDirectory
+        $PsExecPath = Save-PsExec
       }
       catch {
         [System.Windows.MessageBox]::Show("Unable to download PsExec:`n$($_.Exception.Message)", "Run As SYSTEM - PsExec", "OK", "Error") | Out-Null
@@ -2095,7 +2118,7 @@ namespace RunAsSystem
       param($Files)
       if ($Files -and $Files.Count -gt 0) {
         Write-Host "File Dropped: [$($Files[0])]"
-        $txt_FilePath.Text = $Files[0]
+        Set-FilePath -Path $Files[0]
       }
     })
   $Script:DropTarget.Attach($Handle)
@@ -4103,7 +4126,7 @@ $formRunAsSystem.Add_Loaded({
     if ($Arguments) { $txt_Arguments.Text = $Arguments }
     if ($FilePath) {
       Write-Host "FilePath passed: [$FilePath]"
-      $txt_FilePath.Text = $FilePath
+      Set-FilePath -Path $FilePath
     }
     Update-FileSelection
   })
@@ -4132,7 +4155,7 @@ $formRunAsSystem.Add_Drop({
     $Files = $_.Data.GetData([System.Windows.DataFormats]::FileDrop)
     if ($Files -and -not $Script:CurrentRun) {
       Write-Host "File Dropped: [$($Files[0])]"
-      $txt_FilePath.Text = $Files[0]
+      Set-FilePath -Path $Files[0]
     }
   })
 
@@ -4172,7 +4195,7 @@ $btn_Browse.Add_Click({
       $OpenFileDialog.InitialDirectory = Split-Path -Path $CurrentPath -Parent
     }
     if ($OpenFileDialog.ShowDialog()) {
-      $txt_FilePath.Text = $OpenFileDialog.FileName
+      Set-FilePath -Path $OpenFileDialog.FileName
     }
   })
 
@@ -4296,7 +4319,7 @@ foreach ($ToolItem in $MenuItem_ToolPowerShell, $MenuItem_ToolPowerShell32, $Men
       param($MenuItem, $e)
       if ($Script:CurrentRun) { return }
       Write-Host "Tool selected: [$($MenuItem.Tag)]"
-      $txt_FilePath.Text = $MenuItem.Tag
+      Set-FilePath -Path $MenuItem.Tag
     })
 }
 
