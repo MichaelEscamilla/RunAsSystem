@@ -152,10 +152,21 @@ $Script:CurrentUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Nam
 $Script:CurrentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 # Windows PowerShell 5.1 path (on every device: the fallback for relaunches and the right-click menu, and used for .ps1 installers)
 $Script:WindowsPowerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+# 32-bit Windows PowerShell, offered for .ps1 installers: some Intune scripts run in a 32-bit host, where the
+# registry and Program Files are redirected. $null on a 32-bit OS, which has no SysWOW64.
+$Script:WindowsPowerShell32Path = if ([Environment]::Is64BitOperatingSystem) { "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" } else { $null }
 # The PowerShell running this script, so relaunches stay in it (pwsh stays pwsh, 5.1 stays 5.1).
 # $PSHOME rather than the process path, which is Code.exe or powershell_ise.exe when run from an editor.
 $Script:CurrentPowerShellPath = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
 if (-not (Test-Path -LiteralPath $Script:CurrentPowerShellPath)) { $Script:CurrentPowerShellPath = $Script:WindowsPowerShellPath }
+# PowerShell 7, offered as an option for .ps1 installers. A machine-wide install only: a per-user or Store copy
+# (WindowsApps) isn't reachable by SYSTEM. $null when it isn't installed.
+$Script:PwshPath = "$env:ProgramFiles\PowerShell\7\pwsh.exe"
+if (-not (Test-Path -LiteralPath $Script:PwshPath)) {
+  $Script:PwshPath = Get-Command -Name pwsh.exe -CommandType Application -ErrorAction SilentlyContinue |
+    Where-Object { $_.Source -notmatch '\\WindowsApps\\' -and $_.Source -notlike "$env:USERPROFILE\*" } |
+    Select-Object -First 1 -ExpandProperty Source
+}
 # Current run state
 $Script:CurrentRun = $null
 # Type of the last file loaded, so the options can be reset when the type changes
@@ -352,6 +363,10 @@ function Get-FormState {
     MsiUI      = Get-ComboBoxTag -ComboBox $cmb_MsiUI
     LogEnabled = [bool]$chk_Log.IsChecked
     LogPath    = $txt_LogPath.Text.Trim().Trim('"')
+    Ps1Host    = Get-ComboBoxTag -ComboBox $cmb_Ps1Host
+    Ps1Invoke  = Get-ComboBoxTag -ComboBox $cmb_Ps1Invoke
+    Ps1Policy  = Get-ComboBoxTag -ComboBox $cmb_Ps1Policy
+    Ps1Parameters = $txt_Ps1Parameters.Text.Trim()
     Arguments  = $txt_Arguments.Text.Trim()
     Mode       = if ($rad_PsExec.IsChecked) { 'PsExec' } elseif ($rad_CurrentUser.IsChecked) { 'CurrentUser' } else { 'Session0' }
   }
@@ -369,6 +384,16 @@ function Set-FormState {
   Set-ComboBoxTag -ComboBox $cmb_MsiUI -Tag $State.MsiUI
   $chk_Log.IsChecked = [bool]$State.LogEnabled
   if ($State.LogPath) { $txt_LogPath.Text = $State.LogPath }
+  # History saved before the PS1 options existed has neither field, which means the defaults
+  Set-ComboBoxTag -ComboBox $cmb_Ps1Host -Tag $(if ($State.Ps1Host) { $State.Ps1Host } else { 'WindowsPowerShell' })
+  # A run made with PowerShell 7 or 32-bit on a device that has it, loaded where it isn't available
+  if (-not $cmb_Ps1Host.SelectedItem.IsEnabled) {
+    Write-Host "[$($cmb_Ps1Host.SelectedItem.Content)] isn't available, using Windows PowerShell 5.1"
+    Set-ComboBoxTag -ComboBox $cmb_Ps1Host -Tag 'WindowsPowerShell'
+  }
+  Set-ComboBoxTag -ComboBox $cmb_Ps1Invoke -Tag $(if ($State.Ps1Invoke) { $State.Ps1Invoke } else { 'File' })
+  Set-ComboBoxTag -ComboBox $cmb_Ps1Policy -Tag $(if ($State.Ps1Policy) { $State.Ps1Policy } else { 'Bypass' })
+  $txt_Ps1Parameters.Text = [string]$State.Ps1Parameters
   $txt_Arguments.Text = $State.Arguments
   switch ($State.Mode) {
     'PsExec' { $rad_PsExec.IsChecked = $true }
@@ -414,6 +439,10 @@ function Reset-FormOptions {
   Set-ComboBoxTag -ComboBox $cmb_MsiUI -Tag '/qn'
   $chk_Log.IsChecked = $true
   $txt_LogPath.IsEnabled = $true
+  Set-ComboBoxTag -ComboBox $cmb_Ps1Host -Tag 'WindowsPowerShell'
+  Set-ComboBoxTag -ComboBox $cmb_Ps1Invoke -Tag 'File'
+  Set-ComboBoxTag -ComboBox $cmb_Ps1Policy -Tag 'Bypass'
+  $txt_Ps1Parameters.Text = ''
   $txt_Arguments.Text = ''
   $rad_Session0.IsChecked = $true
 }
@@ -462,6 +491,35 @@ function Expand-ArgumentTokens {
   return $Arguments
 }
 
+function Get-Ps1CommandText {
+  # The PowerShell code -Command runs. Under -File the arguments are split by the Windows command line
+  # rules, so 'a','b' isn't an array and single quotes don't group. Here PowerShell parses them itself.
+  param (
+    [Parameter(Mandatory = $true)]
+    [string]$ScriptPath,
+    [Parameter(Mandatory = $false)]
+    [AllowEmptyString()]
+    [string]$Arguments
+  )
+
+  # A script's 'exit N' sets $LASTEXITCODE, so exiting with it passes the installer's code through
+  $Invoke = "& '$($ScriptPath.Replace("'", "''"))' $Arguments".Trim()
+  return "& { $Invoke; exit `$LASTEXITCODE }"
+}
+
+function ConvertTo-NativeArgument {
+  # Wraps a value in double quotes for the Windows command line rules (CommandLineToArgvW), which
+  # powershell.exe and pwsh use: a quote becomes \", and backslashes are doubled only before a quote
+  param (
+    [Parameter(Mandatory = $true)]
+    [string]$Value
+  )
+
+  $Escaped = [regex]::Replace($Value, '(\\*)"', { param($Match) ($Match.Groups[1].Value * 2) + '\"' })
+  $Escaped = [regex]::Replace($Escaped, '(\\+)$', { param($Match) $Match.Groups[1].Value * 2 })
+  return "`"$Escaped`""
+}
+
 function Get-CommandSpec {
   # Builds the program and arguments to run from the current form state
   param (
@@ -474,6 +532,7 @@ function Get-CommandSpec {
 
   $InstallerPath = $State.FilePath
   $LogPath = $null
+  $ProcessMatch = $null
 
   # The arguments box keeps the tokens, so a history entry or another file of the same type gets its own values
   $Tokens = Get-ArgumentTokenValues -InstallerPath $InstallerPath
@@ -499,8 +558,36 @@ function Get-CommandSpec {
       $CommandArguments = $Arguments
     }
     'PS1' {
-      $Execute = $Script:WindowsPowerShellPath
-      $CommandArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$InstallerPath`" $Arguments".Trim()
+      $Execute = switch ($State.Ps1Host) {
+        { $_ -eq 'Pwsh' -and $Script:PwshPath } { $Script:PwshPath; break }
+        { $_ -eq 'WindowsPowerShell32' -and $Script:WindowsPowerShell32Path } { $Script:WindowsPowerShell32Path; break }
+        default { $Script:WindowsPowerShellPath }
+      }
+      $Parts = @('-NoProfile')
+      # 'Default' leaves the switch out, so the device's own policy decides whether the script may run
+      $Policy = if ($State.Ps1Policy) { $State.Ps1Policy } else { 'Bypass' }
+      if ($Policy -ne 'Default') { $Parts += "-ExecutionPolicy $Policy" }
+      # Extra host switches go before -File or -Command, since everything after those belongs to the script
+      if ($State.Ps1Parameters) { $Parts += $State.Ps1Parameters }
+      switch ($State.Ps1Invoke) {
+        'Command' {
+          $Parts += "-Command $(ConvertTo-NativeArgument -Value (Get-Ps1CommandText -ScriptPath $InstallerPath -Arguments $Arguments))"
+          # The path sits in single quotes, so an apostrophe in it appears doubled
+          $ProcessMatch = $InstallerPath.Replace("'", "''")
+        }
+        'EncodedCommand' {
+          # The same code as -Command, so no quoting rules apply to the ArgumentList at all, PsExec included
+          $Encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes((Get-Ps1CommandText -ScriptPath $InstallerPath -Arguments $Arguments)))
+          $Parts += "-EncodedCommand $Encoded"
+          # The path isn't readable in the command line, so Stop looks for the encoded text instead
+          $ProcessMatch = $Encoded
+        }
+        default {
+          $Parts += "-File `"$InstallerPath`""
+          if ($Arguments) { $Parts += $Arguments }
+        }
+      }
+      $CommandArguments = $Parts -join ' '
     }
     'CMD' {
       $Execute = "$env:SystemRoot\System32\cmd.exe"
@@ -526,6 +613,8 @@ function Get-CommandSpec {
     # Just the ArgumentList with the tokens filled in, for Copy beside the arguments
     UserArguments    = [string]$Arguments
     CommandLine      = "`"$Execute`" $CommandArguments".Trim()
+    # Another string Stop can find the installer's process by, when the path isn't in its command line as is
+    ProcessMatch     = $ProcessMatch
   }
 }
 
@@ -663,6 +752,7 @@ function Update-FileSelection {
   $panel_MsiOptions.Visibility = if ($IsWindowsInstaller) { 'Visible' } else { 'Collapsed' }
   $panel_MsiLog.Visibility = if ($IsWindowsInstaller) { 'Visible' } else { 'Collapsed' }
   $cmb_MsiAction.IsEnabled = ($Type -eq 'MSI')
+  $panel_Ps1Options.Visibility = if ($Type -eq 'PS1') { 'Visible' } else { 'Collapsed' }
 
   # Open Folder is available whenever the file exists, before or after a run
   $btn_OpenFolder.Visibility = if ($Type -and (Test-Path -LiteralPath $Path -PathType Leaf)) { 'Visible' } else { 'Collapsed' }
@@ -1077,7 +1167,7 @@ function Set-RunningState {
     [bool]$Running
   )
 
-  foreach ($Control in @($txt_FilePath, $btn_Reset, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $txt_Arguments, $txtblk_InsertLogFile, $txtblk_InsertInstallerDir, $txtblk_InsertInstallerName, $rad_Session0, $rad_PsExec, $rad_CurrentUser, $btn_HistoryLoad, $btn_HistoryClear)) {
+  foreach ($Control in @($txt_FilePath, $btn_Reset, $btn_Browse, $cmb_MsiAction, $cmb_MsiUI, $chk_Log, $txt_LogPath, $cmb_Ps1Host, $cmb_Ps1Invoke, $cmb_Ps1Policy, $txt_Ps1Parameters, $txt_Arguments, $txtblk_InsertLogFile, $txtblk_InsertInstallerDir, $txtblk_InsertInstallerName, $rad_Session0, $rad_PsExec, $rad_CurrentUser, $btn_HistoryLoad, $btn_HistoryClear)) {
     $Control.IsEnabled = -not $Running
   }
 
@@ -1309,12 +1399,15 @@ function Get-RunProcessId {
 
   $Since = $Run.Started.AddSeconds(-5)
   $InstallerPath = $Run.Spec.InstallerPath
+  # A .ps1 run with -Command or -EncodedCommand has its path doubled-quoted or encoded in the command line
+  $ProcessMatch = if ($Run.Spec.ProcessMatch) { $Run.Spec.ProcessMatch } else { $InstallerPath }
   # The local PsExec client also has the path in its command line, and is stopped separately
   $PsExecClientId = if ($Run.Process) { $Run.Process.Id } else { -1 }
 
   $Found = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
       $_.CommandLine -and
-      $_.CommandLine.IndexOf($InstallerPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+      ($_.CommandLine.IndexOf($InstallerPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $_.CommandLine.IndexOf($ProcessMatch, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and
       $_.CreationDate -ge $Since -and
       $_.ProcessId -ne $PID -and
       $_.ProcessId -ne $PsExecClientId
@@ -1433,6 +1526,10 @@ function Complete-SystemRun {
       MsiUI       = $Run.State.MsiUI
       LogEnabled  = $Run.State.LogEnabled
       LogPath     = $Run.State.LogPath
+      Ps1Host     = $Run.State.Ps1Host
+      Ps1Invoke   = $Run.State.Ps1Invoke
+      Ps1Policy   = $Run.State.Ps1Policy
+      Ps1Parameters = $Run.State.Ps1Parameters
       Arguments   = $Run.State.Arguments
       Mode        = $Run.Mode
       CommandLine = $Run.CommandRun
@@ -1587,7 +1684,15 @@ function Update-HistoryList {
     # Line 2: When and how
     $Line2 = New-Object System.Windows.Controls.TextBlock
     $ModeText = Get-ModeText -Mode $Entry.Mode -Short
-    $ActionText = if ($Entry.MsiAction -and (Get-InstallerType -Path $Entry.FilePath) -eq 'MSI') { "$($Entry.MsiAction)  |  " } else { '' }
+    $EntryType = Get-InstallerType -Path $Entry.FilePath
+    $ActionText = if ($Entry.MsiAction -and $EntryType -eq 'MSI') { "$($Entry.MsiAction)  |  " } else { '' }
+    # Only the PS1 options that differ from the defaults, so most entries stay short
+    if ($EntryType -eq 'PS1') {
+      if ($Entry.Ps1Host -eq 'Pwsh') { $ActionText += "pwsh  |  " }
+      if ($Entry.Ps1Host -eq 'WindowsPowerShell32') { $ActionText += "32-bit  |  " }
+      if ($Entry.Ps1Invoke -in 'Command', 'EncodedCommand') { $ActionText += "-$($Entry.Ps1Invoke)  |  " }
+      if ($Entry.Ps1Policy -and $Entry.Ps1Policy -ne 'Bypass') { $ActionText += "Policy: $($Entry.Ps1Policy)  |  " }
+    }
     $Line2.Text = "$($Entry.Timestamp)  |  $ActionText$ModeText"
     $Line2.FontSize = 11
     $Line2.Foreground = $formRunAsSystem.FindResource('TextMuted')
@@ -3233,6 +3338,75 @@ Add-Type -AssemblyName WindowsBase
                     Name="txt_LogPath"
                     ToolTip="Verbose log path. Defaults to the installer name plus the action, in the installer's folder (e.g. Setup.msi.Install.log)."/>
               </Grid>
+              <Grid Name="panel_Ps1Options"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="260"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="40"/>
+                  <RowDefinition Height="40"/>
+                </Grid.RowDefinitions>
+                <Label Grid.Column="0"
+                    Content="PowerShell"/>
+                <ComboBox Grid.Column="1"
+                    Name="cmb_Ps1Host">
+                  <ComboBoxItem Content="Windows PowerShell 5.1"
+                      Tag="WindowsPowerShell"
+                      IsSelected="True"/>
+                  <ComboBoxItem Name="cmbitem_Ps1Host32"
+                      Content="Windows PowerShell 5.1 (32-bit)"
+                      Tag="WindowsPowerShell32"/>
+                  <ComboBoxItem Name="cmbitem_Ps1HostPwsh"
+                      Content="PowerShell 7"
+                      Tag="Pwsh"/>
+                </ComboBox>
+                <Label Grid.Column="2"
+                    Content="Passed as"/>
+                <ComboBox Grid.Column="3"
+                    Name="cmb_Ps1Invoke"
+                    ToolTip="-File: Windows splits the ArgumentList, not PowerShell. Only double quotes group, single quotes are literal, and 'a','b' isn't an array.&#10;&#10;-Command: the script is run with &amp; and PowerShell parses the ArgumentList, so arrays like -Path 'C:\One','C:\Two' and single quotes work.&#10;&#10;-EncodedCommand: the same as -Command, sent as base64, so no quoting rules apply on the way.">
+                  <!-- A plain string ToolTip: the ToolTip style's template shows its content as text, so an element would show its type name -->
+                  <ComboBoxItem Content="-File"
+                      Tag="File"
+                      IsSelected="True"/>
+                  <ComboBoxItem Content="-Command"
+                      Tag="Command"/>
+                  <ComboBoxItem Content="-EncodedCommand"
+                      Tag="EncodedCommand"/>
+                </ComboBox>
+                <!-- 'ExecutionPolicy' doesn't fit the 100px label column -->
+                <Label Grid.Row="1"
+                    Grid.Column="0"
+                    Content="Policy"
+                    ToolTip="-ExecutionPolicy"/>
+                <!-- 'Default' leaves -ExecutionPolicy out, so the device's policy applies -->
+                <ComboBox Grid.Row="1"
+                    Grid.Column="1"
+                    Name="cmb_Ps1Policy">
+                  <ComboBoxItem Content="Bypass"
+                      Tag="Bypass"
+                      IsSelected="True"/>
+                  <ComboBoxItem Content="Unrestricted"
+                      Tag="Unrestricted"/>
+                  <ComboBoxItem Content="RemoteSigned"
+                      Tag="RemoteSigned"/>
+                  <ComboBoxItem Content="AllSigned"
+                      Tag="AllSigned"/>
+                  <ComboBoxItem Content="Not set (device policy)"
+                      Tag="Default"/>
+                </ComboBox>
+                <Label Grid.Row="1"
+                    Grid.Column="2"
+                    Content="Parameters"/>
+                <TextBox Grid.Row="1"
+                    Grid.Column="3"
+                    Name="txt_Ps1Parameters"
+                    ToolTip="Extra PowerShell parameters, added before -File or -Command (e.g. -NonInteractive -WindowStyle Hidden)"/>
+              </Grid>
               <Grid>
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="100"/>
@@ -3534,6 +3708,19 @@ $XAMLformRunAsSystem.SelectNodes("//*[@Name]") | ForEach-Object { Set-Variable -
 # The status bar text the window opens with, so Reset and the status message timer can put it back
 $Script:DefaultStatusBarText = $txtblk_StatusBar.Text
 
+# PowerShell 7 is only offered for .ps1 installers when a machine-wide copy is installed
+if ($Script:PwshPath) {
+  $cmbitem_Ps1HostPwsh.ToolTip = $Script:PwshPath
+}
+else {
+  $cmbitem_Ps1HostPwsh.IsEnabled = $false
+  $cmbitem_Ps1HostPwsh.Content = 'PowerShell 7 (not installed)'
+}
+if (-not $Script:WindowsPowerShell32Path) {
+  $cmbitem_Ps1Host32.IsEnabled = $false
+  $cmbitem_Ps1Host32.Content = 'Windows PowerShell 5.1 (32-bit, needs 64-bit Windows)'
+}
+
 # Timer that watches a run in progress
 $Script:RunTimer = New-Object System.Windows.Threading.DispatcherTimer
 $Script:RunTimer.Interval = [TimeSpan]::FromMilliseconds(500)
@@ -3637,6 +3824,10 @@ $cmb_MsiAction.Add_SelectionChanged({
     Update-CommandPreview
   })
 $cmb_MsiUI.Add_SelectionChanged({ Update-CommandPreview })
+$cmb_Ps1Host.Add_SelectionChanged({ Update-CommandPreview })
+$cmb_Ps1Invoke.Add_SelectionChanged({ Update-CommandPreview })
+$cmb_Ps1Policy.Add_SelectionChanged({ Update-CommandPreview })
+$txt_Ps1Parameters.Add_TextChanged({ Update-CommandPreview })
 $chk_Log.Add_Click({
     $txt_LogPath.IsEnabled = [bool]$chk_Log.IsChecked
     Update-CommandPreview

@@ -32,11 +32,16 @@ Options:
 1. Pass a SINGLE path (use the deepest folder; `New-Item -Force` creates all
    parents). Wrap in DOUBLE quotes. Best for folder-create scripts like
    PatchMyPC-Set-Folder.ps1.
-2. DONE 2026-10-13 (unreleased, no version bump yet): PS1 options row has
+2. DONE 2026-10-14 (unreleased, no version bump yet; the 2026-10-13 "done"
+   was premature, it wasn't in the code): PS1 options row has
    "Passed as: -Command" (+ PowerShell 5.1/7 host). It emits `-Command "try { &
    '<script>' <args> } catch { Write-Error $_; exit 1 }; exit $LASTEXITCODE"`
    so comma-arrays work. Default stays -File. (try/catch needed: plain exit
    $LASTEXITCODE returns 0 on bad param/missing file; $? is false after exit N.)
+   UPDATE 2026-10-14: try/catch removed; it now emits `-Command "& { &
+   '<script>' <args>; exit $LASTEXITCODE }"`, so a bad param exits 0. Dropdown items are just
+   "-File" / "-Command" until better descriptions are chosen.
+   Details in ProjectStatus.md ("PS1 options").
 3. Give the script param `[Parameter(ValueFromRemainingArguments)]` AND pass
    DOUBLE-quoted space-separated paths (fragile; prefer option 1).
 
