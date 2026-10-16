@@ -151,6 +151,7 @@ Output capture, tested outside the app on 2026-10-12 (not elevated), in 5.1 and 
 - [x] Test the status bar timer in the app: a message clears after 4 seconds, a second message before then restarts the countdown, and the `-Persist` "WITHOUT its arguments" warning stays (the owner confirmed it on 2026-10-10).
 - [ ] Run the elevated tests above.
 - [x] Add screenshots to `Images/` and the README (2026-10-12: `Screenshot-Empty.png`, `Screenshot-MSI.png`, `Screenshot-PS1.png`, captured at 100% scale with `PrintWindow` so the rounded corners stay transparent). Retake them when the UI changes.
+- [x] README image links use absolute `raw.githubusercontent.com/.../main/Images/` URLs so they render on michaeltheadmin.com and the PowerShell Gallery (2026-10-15, same as GetMSIInformation). For a local preview of new screenshots, run `Tools/Toggle-ReadmeImages.ps1 -Mode Local`, then `-Mode Absolute` before committing. New images only show on the site once they are on `main`.
 - [ ] Optionally add a short URL on michaeltheadmin.com (like `msiapp.michaeltheadmin.com`) and update the README.
 - [x] Publish the first release with the Release workflow (2026.10.9.0, then 2026.10.9.1).
 - [ ] Optionally publish to the PowerShell Gallery. The PSGallery update channel needs it.

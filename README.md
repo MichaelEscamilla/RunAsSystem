@@ -3,7 +3,7 @@ Run MSI, EXE and script installers as **NT AUTHORITY\SYSTEM** to test an install
 
 Select or drag and drop an installer, set the arguments and click **Run as SYSTEM**. The exit code and what it means are shown when the installer finishes.
 
-![RunAsSystem with an MSI loaded](Images/Screenshot-MSI.png)
+![RunAsSystem with an MSI loaded](https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/Images/Screenshot-MSI.png)
 
 ## Quick Access
 Run the script directly from GitHub:
@@ -18,15 +18,15 @@ The app needs administrator rights. If it isn't started elevated, it relaunches 
 ## Screenshots
 When it opens, the app is ready for you to drag and drop or browse for an installer:
 
-![RunAsSystem with nothing loaded](Images/Screenshot-Empty.png)
+![RunAsSystem with nothing loaded](https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/Images/Screenshot-Empty.png)
 
 An MSI shows Windows Installer options (action, UI level and a verbose log). The **Command Line** box shows exactly what will run:
 
-![RunAsSystem with an MSI loaded](Images/Screenshot-MSI.png)
+![RunAsSystem with an MSI loaded](https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/Images/Screenshot-MSI.png)
 
 A PowerShell script runs with Windows PowerShell 5.1, the same as Intune and ConfigMgr:
 
-![RunAsSystem with a PowerShell script loaded](Images/Screenshot-PS1.png)
+![RunAsSystem with a PowerShell script loaded](https://raw.githubusercontent.com/MichaelEscamilla/RunAsSystem/main/Images/Screenshot-PS1.png)
 
 ## Credits
 - **[Ben Whitmore](https://github.com/byteben)** and **[Patch My PC](https://patchmypc.com)**: Ben's [Patch My PC Connectivity tool](https://github.com/PatchMyPCTeam/CustomerTroubleshooting/tree/Release/PowerShell/Connectivity) inspired RunAsSystem. It showed that an installer can run as SYSTEM in Session 0 through a one-time Scheduled Task, without PsExec. Session 0 mode is based on that approach. RunAsSystem adds a GUI, exit code descriptions, run history and a right-click menu.
