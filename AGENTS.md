@@ -11,7 +11,7 @@ RunAsSystem is a **single-file PowerShell + WPF app** (`RunAsSystem.ps1`) for ru
 
 Keep changes consistent with those repos.
 
-**Read [docs/ProjectStatus.md](docs/ProjectStatus.md) first.** It holds the decisions already made, what has and hasn't been tested, the known limitations and the to-do list. Update it when you finish work.
+**Read [docs/dev/ProjectStatus.md](docs/dev/ProjectStatus.md) first.** It holds the decisions already made, what has and hasn't been tested, the known limitations and the to-do list. Update it when you finish work.
 
 ## Hard Constraints
 
@@ -93,6 +93,14 @@ Sections appear in this order. Keep the banner comments and `#region` markers.
 - Don't leave `$Script:ScriptVersion` lowered after testing the update. Check that both version fields match before releasing.
 - `.github/workflows/release.yml` (manual dispatch) builds the GitHub release from those notes. The in-app update check compares against the latest release tag.
 - `.github/workflows/publish-module.yaml` publishes the script to the PowerShell Gallery.
+
+## Documentation
+
+- `README.md` is the landing page: what the tool does, Quick Access, a short Features list, a few screenshots, and an index of the docs pages. Keep the detail out of it.
+- User docs live in `docs/`, one page per topic, each starting with a `[RunAsSystem](../README.md) > Page` breadcrumb. When a feature changes, update its page in the same change. `docs/dev/` is for maintainers and agents, not users.
+- Use **relative** links and image paths everywhere (`Images/...` from the README, `../Images/...` from `docs/`). michaeltheadmin.com imports the README with its `repoimporter` shortcode, which rewrites relative images to `raw.githubusercontent.com` and relative links to github.com. Don't use root-relative (`/...`) paths, which the shortcode leaves alone.
+- Leave a blank line around headings, lists, tables and code fences (markdownlint).
+- **Screenshots** are generated, not taken by hand. `Tools/New-Screenshots.ps1` (run elevated) reads the scenarios in `Tools/Screenshots.psd1`, launches the app with demo files from `C:\RunAsSystem\Files`, drives it with UI Automation by control `Name`, and saves 1100x760 PNGs with transparent corners to `Images/<page>-<topic>.png`. To add a screenshot, add a scenario to the `.psd1`, then link the image from its docs page. After a UI change, rerun it (`-Name <pattern>` for some, `-AllowInstall` for the ones that install software). Renaming a control that a scenario uses makes that scenario fail, so update the `.psd1` too. The Explorer right-click menu is still captured by hand.
 
 ## Testing
 
